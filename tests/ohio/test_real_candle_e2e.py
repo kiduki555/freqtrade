@@ -281,7 +281,7 @@ class TestFullPipeline:
         warmup = 200
         pos = btc_full["ohio_policy_max_positions"].iloc[warmup:]
         valid = pos.dropna()
-        assert (valid >= 1).all() and (valid <= 6).all(), (
+        assert (valid >= 1).all() and (valid <= 12).all(), (
             f"max_positions out of range: min={valid.min()}, max={valid.max()}"
         )
 

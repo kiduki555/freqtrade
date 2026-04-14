@@ -174,8 +174,8 @@ class TestClassAttributes:
         assert OhioThinStrategy.INTERFACE_VERSION == 3
 
     def test_can_short(self):
-        # V1 is long-only; short entries not yet implemented
-        assert OhioThinStrategy.can_short is False
+        # V2: long/short via trend direction
+        assert OhioThinStrategy.can_short is True
 
     def test_minimal_roi(self):
         assert OhioThinStrategy.minimal_roi == {"0": 100}
@@ -318,10 +318,19 @@ class TestPopulateEntryTrend:
         result = strategy.populate_entry_trend(df, {"pair": "BTC/USDT"})
         assert "enter_tag" in result.columns
 
-    def test_enter_short_always_zero(self, strategy):
-        df = _ohio_dataframe(3, ohio_policy_enabled=[True, True, True])
+    def test_enter_short_when_trend_negative(self, strategy):
+        df = _ohio_dataframe(
+            3,
+            ohio_policy_enabled=[True, True, True],
+            ohio_stable_trend=[-0.5, 0.3, -0.8],
+        )
         result = strategy.populate_entry_trend(df, {"pair": "BTC/USDT"})
-        assert (result["enter_short"] == 0).all()
+        assert result["enter_short"].iloc[0] == 1
+        assert result["enter_short"].iloc[1] == 0
+        assert result["enter_short"].iloc[2] == 1
+        assert result["enter_long"].iloc[0] == 0
+        assert result["enter_long"].iloc[1] == 1
+        assert result["enter_long"].iloc[2] == 0
 
 
 # ---------------------------------------------------------------------------

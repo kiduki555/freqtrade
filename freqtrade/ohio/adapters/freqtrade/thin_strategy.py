@@ -73,9 +73,8 @@ class OhioThinStrategy(IStrategy):
     use_exit_signal = True
     exit_profit_only = False
     process_only_new_candles = True
-    # Short entries not yet implemented — V1 is long-only.
-    # Set to False to avoid silent signal drops.
-    can_short = False
+    # V2: long/short via trend direction (ohio_stable_trend).
+    can_short = True
 
     # ------------------------------------------------------------------
     # __init__
@@ -137,7 +136,7 @@ class OhioThinStrategy(IStrategy):
     # populate_entry_trend — Fitness-based Entry Signals
     # ------------------------------------------------------------------
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        """Generate entry signals based on ohio_active_mode."""
+        """Generate entry signals based on ohio_active_mode + trend direction."""
         logger.info("ohio.populate_entry_trend | pair=%s", metadata["pair"])
         dataframe["enter_long"] = 0
         dataframe["enter_short"] = 0
@@ -146,11 +145,19 @@ class OhioThinStrategy(IStrategy):
         # Entry condition: policy enabled
         enabled = dataframe["ohio_policy_enabled"] == True  # noqa: E712
         active = dataframe["ohio_active_mode"]
+        trend = dataframe.get("ohio_stable_trend", 0.0)
 
         entry_mask = enabled.fillna(False)
-        dataframe.loc[entry_mask, "enter_long"] = 1
-        dataframe.loc[entry_mask, "enter_tag"] = (
-            "ohio_" + active[entry_mask].astype(str)
+        long_mask = entry_mask & (trend >= 0)
+        short_mask = entry_mask & (trend < 0)
+
+        dataframe.loc[long_mask, "enter_long"] = 1
+        dataframe.loc[long_mask, "enter_tag"] = (
+            "ohio_" + active[long_mask].astype(str)
+        )
+        dataframe.loc[short_mask, "enter_short"] = 1
+        dataframe.loc[short_mask, "enter_tag"] = (
+            "ohio_" + active[short_mask].astype(str) + "_short"
         )
 
         return dataframe

@@ -34,7 +34,7 @@ _ENTRY_ADJ_HIGH_FITNESS: float = -0.05   # high fitness → easier entry (lower 
 _ENTRY_ADJ_LOW_FITNESS: float = 0.15     # low fitness → harder entry (higher bar)
 
 _MAX_POS_MIN: int = 1
-_MAX_POS_MAX: int = 6
+_MAX_POS_MAX: int = 12
 
 _SL_ADJ_MIN: float = -0.01
 _SL_ADJ_MAX: float = 0.01

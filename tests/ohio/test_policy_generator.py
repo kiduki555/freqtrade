@@ -2,7 +2,7 @@
 
 Covers:
 1.  fitness=0 → enabled=False
-2.  fitness=1 → enabled=True, size_multiplier=1.5, max_positions=6
+2.  fitness=1 → enabled=True, size_multiplier=1.5, max_positions=12
 3.  fitness=0.5 → intermediate values
 4.  fitness exactly at threshold → enabled=True
 5.  fitness just below threshold → enabled=False
@@ -112,9 +112,9 @@ class TestFitnessOne:
         policy = _gen.generate(StrategyMode.TREND_FOLLOWING, 1.0, _clean_meta())
         assert pytest.approx(policy.entry_threshold_adj) == -0.05
 
-    def test_max_positions_at_six_when_fitness_one(self) -> None:
+    def test_max_positions_at_twelve_when_fitness_one(self) -> None:
         policy = _gen.generate(StrategyMode.TREND_FOLLOWING, 1.0, _clean_meta())
-        assert policy.max_positions == 6
+        assert policy.max_positions == 12
 
     def test_stoploss_adj_at_max_when_fitness_one(self) -> None:
         policy = _gen.generate(StrategyMode.TREND_FOLLOWING, 1.0, _clean_meta())
@@ -141,9 +141,9 @@ class TestFitnessHalf:
         assert pytest.approx(policy.entry_threshold_adj) == 0.05
 
     def test_max_positions_midpoint(self) -> None:
-        # lerp(1, 6, 0.5) = 3.5 → round → 4
+        # lerp(1, 12, 0.5) = 6.5 → round → 6
         policy = _gen.generate(StrategyMode.MEAN_REVERSION, 0.5, _clean_meta())
-        assert policy.max_positions == 4
+        assert policy.max_positions == 6
 
     def test_stoploss_adj_midpoint(self) -> None:
         # lerp(-0.01, 0.01, 0.5) = 0.0
