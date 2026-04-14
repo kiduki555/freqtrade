@@ -342,6 +342,75 @@ class TestBackwardCompat:
         assert with_atr == pytest.approx(original, abs=1e-9)
 
 
+class TestChandelierActivation:
+    def test_below_activation_uses_base(self):
+        """Profit below chandelier_activation → no chandelier, no profit lock, just base."""
+        sl = compute_stoploss(
+            _trend_profile_v2(), _default_policy(),
+            current_profit=0.01,  # below 0.02 activation
+            transition_risk=0.0,
+            fitness_score=0.5,
+            atr_scale=1.0,
+            atr_ratio=0.012,
+        )
+        base = compute_stoploss(
+            _trend_profile_v2(), _default_policy(),
+            current_profit=0.0,
+            transition_risk=0.0,
+            fitness_score=0.5,
+            atr_scale=1.0,
+            atr_ratio=0.012,
+        )
+        assert sl == pytest.approx(base, abs=1e-9)
+
+    def test_above_activation_uses_chandelier(self):
+        """Profit above activation → chandelier trailing active."""
+        sl = compute_stoploss(
+            _trend_profile_v2(), _default_policy(),
+            current_profit=0.05,  # above 0.02 activation
+            transition_risk=0.0,
+            fitness_score=0.5,
+            atr_scale=1.0,
+            atr_ratio=0.012,  # chandelier = -(2.5 * 0.012) = -0.03
+        )
+        # Chandelier SL = -0.03
+        # Base SL (trend, fitness 0.5) ~= -0.10
+        # max(-0.10, -0.03) = -0.03 (chandelier wins, tighter)
+        assert sl == pytest.approx(-0.03, abs=0.005)
+
+
+class TestChandelierTighterWins:
+    def test_chandelier_overrides_base_when_tighter(self):
+        """When chandelier SL is tighter than base, chandelier is used."""
+        sl = compute_stoploss(
+            _trend_profile_v2(), _default_policy(),
+            current_profit=0.05,
+            transition_risk=0.0,
+            fitness_score=0.0,   # low fitness → wide base (sl_wide = -0.12)
+            atr_scale=1.0,
+            atr_ratio=0.010,     # chandelier = -(2.5 * 0.01) = -0.025
+        )
+        # max(-0.12, -0.025) = -0.025 → chandelier wins
+        assert sl == pytest.approx(-0.025, abs=0.005)
+
+
+class TestChandelierDisabledMR:
+    def test_mr_uses_profit_lock_not_chandelier(self):
+        """MR mode (chandelier_enabled=False) uses profit lock at 2%+."""
+        sl = compute_stoploss(
+            _mr_profile_v2(), _default_policy(),
+            current_profit=0.10,  # 10% profit
+            transition_risk=0.0,
+            fitness_score=0.5,
+            atr_scale=1.0,
+            atr_ratio=0.012,
+        )
+        # MR: chandelier disabled → profit lock: -(0.10 * 0.50) = -0.05
+        # base_sl ~= -0.065
+        # max(-0.065, -0.05) = -0.05 → profit lock
+        assert sl == pytest.approx(-0.05, abs=0.005)
+
+
 class TestNoFreqtradeImports:
     def test_exit_adapter_has_no_ft_imports(self):
         src_path = (
