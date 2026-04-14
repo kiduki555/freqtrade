@@ -39,12 +39,14 @@ def compute_stoploss(
     current_profit: float,
     transition_risk: float,
     fitness_score: float = 0.5,
+    atr_scale: float = 1.0,
+    atr_ratio: float = 0.0,
 ) -> float:
     """Compute the dynamic stoploss ratio for an open position.
 
     Args:
-        profile: A ``StrategyProfile`` with ``stoploss_range``
-                 (sl_wide, sl_tight — both negative).
+        profile: A ``StrategyProfile`` with ``stoploss_range`` and optional
+                 ``atr_stop_direction``, ``atr_scale_cap``, ``chandelier_*``.
         policy: An ``ExecutionPolicy`` with ``enabled`` and
                 ``stoploss_width_adj``.
         current_profit: Unrealised profit ratio of the position.
@@ -52,6 +54,9 @@ def compute_stoploss(
             Note: entry is blocked at >0.85 (risk_gate), but stoploss
             tightening starts at >0.70 — intentional graduated response.
         fitness_score: Current fitness [0, 1] for lerping within stoploss_range.
+        atr_scale: Ratio of current ATR to baseline ATR. 1.0 = average vol.
+                   Clamped internally by profile.atr_scale_cap.
+        atr_ratio: Current ATR/close ratio for Chandelier calculation.
 
     Returns:
         Negative float representing the stoploss ratio.
@@ -64,12 +69,31 @@ def compute_stoploss(
 
     adjusted = base_sl + policy.stoploss_width_adj  # type: ignore[union-attr]
 
+    # --- ATR scaling ---
+    atr_cap = getattr(profile, "atr_scale_cap", 2.0)
+    clamped_scale = _clamp(atr_scale, 1.0 / atr_cap, atr_cap)
+    direction = getattr(profile, "atr_stop_direction", "tighten")
+
+    if direction == "widen":
+        # MR: vol up → stop wider (more negative)
+        adjusted *= clamped_scale
+    else:
+        # tighten: vol up → stop tighter (closer to zero)
+        adjusted *= (1.0 / clamped_scale)
+
     # Regime-transition tightening (graduated: fires before entry block at 0.85)
     if transition_risk > _TRANSITION_TIGHTEN_THRESHOLD:
         adjusted *= _TRANSITION_TIGHTEN_FACTOR  # closer to zero = tighter
 
-    # Trailing profit lock
-    if current_profit > _TRAILING_PROFIT_THRESHOLD:
+    # --- Trailing: Chandelier or profit lock ---
+    chandelier_on = getattr(profile, "chandelier_enabled", False)
+    chandelier_mult = getattr(profile, "chandelier_multiplier", 2.5)
+    chandelier_act = getattr(profile, "chandelier_activation", 0.02)
+
+    if chandelier_on and atr_ratio > 0 and current_profit > chandelier_act:
+        chandelier_sl = -(chandelier_mult * atr_ratio)
+        adjusted = max(adjusted, chandelier_sl)  # tighter wins (both negative)
+    elif current_profit > _TRAILING_PROFIT_THRESHOLD:
         adjusted = max(adjusted, -(current_profit * _TRAILING_PROFIT_RATIO))
 
     return _clamp(adjusted, _HARD_FLOOR, _TIGHTEST)

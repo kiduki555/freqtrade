@@ -21,6 +21,17 @@ class FakeProfile:
 
 
 @dataclass(frozen=True)
+class FakeProfileV2:
+    """Profile with ATR + Chandelier fields."""
+    stoploss_range: tuple[float, float]
+    atr_stop_direction: str = "tighten"
+    atr_scale_cap: float = 2.0
+    chandelier_enabled: bool = False
+    chandelier_multiplier: float = 2.5
+    chandelier_activation: float = 0.02
+
+
+@dataclass(frozen=True)
 class FakePolicy:
     enabled: bool = True
     size_multiplier: float = 0.9
@@ -34,6 +45,24 @@ class FakePolicy:
 def _trend_profile() -> FakeProfile:
     """Trend-following: wide stop [-0.12, -0.08]."""
     return FakeProfile(stoploss_range=(-0.12, -0.08))
+
+
+def _trend_profile_v2() -> FakeProfileV2:
+    return FakeProfileV2(
+        stoploss_range=(-0.12, -0.08),
+        atr_stop_direction="tighten",
+        chandelier_enabled=True,
+        chandelier_multiplier=2.5,
+        chandelier_activation=0.02,
+    )
+
+
+def _mr_profile_v2() -> FakeProfileV2:
+    return FakeProfileV2(
+        stoploss_range=(-0.08, -0.05),
+        atr_stop_direction="widen",
+        chandelier_enabled=False,
+    )
 
 
 def _defensive_profile() -> FakeProfile:
@@ -256,6 +285,61 @@ class TestProfileNewFields:
         d = profiles[StrategyMode.DEFENSIVE]
         assert d.atr_stop_direction == "tighten"
         assert d.chandelier_enabled is False
+
+
+class TestAtrScalingTighten:
+    def test_high_vol_tightens_trend(self):
+        """atr_scale=1.5 + trend_following (tighten) → stop closer to zero."""
+        base = compute_stoploss(
+            _trend_profile_v2(), _default_policy(), 0.0, 0.0,
+            fitness_score=0.5, atr_scale=1.0,
+        )
+        tightened = compute_stoploss(
+            _trend_profile_v2(), _default_policy(), 0.0, 0.0,
+            fitness_score=0.5, atr_scale=1.5,
+        )
+        assert tightened > base  # closer to zero = tighter
+
+
+class TestAtrScalingWiden:
+    def test_high_vol_widens_mr(self):
+        """atr_scale=1.5 + mean_reversion (widen) → stop further from zero."""
+        base = compute_stoploss(
+            _mr_profile_v2(), _default_policy(), 0.0, 0.0,
+            fitness_score=0.5, atr_scale=1.0,
+        )
+        widened = compute_stoploss(
+            _mr_profile_v2(), _default_policy(), 0.0, 0.0,
+            fitness_score=0.5, atr_scale=1.5,
+        )
+        assert widened < base  # further from zero = wider
+
+
+class TestAtrScaleClamped:
+    def test_extreme_scale_clamped(self):
+        """atr_scale=5.0 should behave same as atr_scale=2.0 (cap)."""
+        at_cap = compute_stoploss(
+            _trend_profile_v2(), _default_policy(), 0.0, 0.0,
+            fitness_score=0.5, atr_scale=2.0,
+        )
+        extreme = compute_stoploss(
+            _trend_profile_v2(), _default_policy(), 0.0, 0.0,
+            fitness_score=0.5, atr_scale=5.0,
+        )
+        assert extreme == pytest.approx(at_cap, abs=1e-9)
+
+
+class TestBackwardCompat:
+    def test_scale_1_matches_original(self):
+        """atr_scale=1.0 produces identical result to no-ATR call."""
+        original = compute_stoploss(
+            _trend_profile(), _default_policy(), 0.0, 0.3, fitness_score=0.5,
+        )
+        with_atr = compute_stoploss(
+            _trend_profile_v2(), _default_policy(), 0.0, 0.3,
+            fitness_score=0.5, atr_scale=1.0,
+        )
+        assert with_atr == pytest.approx(original, abs=1e-9)
 
 
 class TestNoFreqtradeImports:
