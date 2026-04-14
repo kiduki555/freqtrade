@@ -23,3 +23,8 @@ class OhioConfig:
 
     # Warmup
     startup_candle_count: int = 4320  # 180 days @ 1h
+
+    # Hedge mode selector (Enhancement #2)
+    hedge_eta: float = 0.1              # learning rate [0.01, 0.5]
+    hedge_temperature: float = 2.0      # fitness flattening [1.0, 5.0]
+    hedge_weight_floor: float = 0.05    # min weight per mode [0.01, 0.15]
