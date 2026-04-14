@@ -411,6 +411,23 @@ class TestChandelierDisabledMR:
         assert sl == pytest.approx(-0.05, abs=0.005)
 
 
+class TestAtrBaselineNan:
+    def test_nan_baseline_defaults_scale_to_1(self):
+        """When atr_baseline is NaN/0 (warmup), atr_scale should be 1.0.
+
+        Verifies compute_stoploss with atr_scale=1.0 matches default (no scaling).
+        """
+        no_scale = compute_stoploss(
+            _trend_profile_v2(), _default_policy(), 0.0, 0.0,
+            fitness_score=0.5,
+        )
+        explicit_1 = compute_stoploss(
+            _trend_profile_v2(), _default_policy(), 0.0, 0.0,
+            fitness_score=0.5, atr_scale=1.0,
+        )
+        assert no_scale == pytest.approx(explicit_1, abs=1e-9)
+
+
 class TestNoFreqtradeImports:
     def test_exit_adapter_has_no_ft_imports(self):
         src_path = (
