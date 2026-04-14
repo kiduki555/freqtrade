@@ -140,16 +140,26 @@ class FitnessEstimator:
     def __init__(
         self,
         profiles: dict[StrategyMode, StrategyProfile] | None = None,
+        hedge_eta: float = 0.1,
+        hedge_temperature: float = 2.0,
+        hedge_weight_floor: float = 0.05,
     ) -> None:
         """Initialise the estimator.
 
         Args:
             profiles: Pre-loaded strategy profiles.  If *None*, the four
                       built-in YAML profiles are loaded automatically.
+            hedge_eta: Hedge algorithm learning rate. 0.0 → uniform weights.
+            hedge_temperature: Temperature for softening fitness scores before
+                               Hedge adjustment. Higher values flatten scores.
+            hedge_weight_floor: Minimum weight per mode to prevent mode death.
         """
         if profiles is None:
             profiles = load_default_profiles()
         self._profiles: dict[StrategyMode, StrategyProfile] = profiles
+        self._hedge_eta = hedge_eta
+        self._hedge_temperature = hedge_temperature
+        self._hedge_weight_floor = hedge_weight_floor
 
     # ------------------------------------------------------------------
     # Public API
@@ -295,7 +305,7 @@ class FitnessEstimator:
             mode_scores[mode.value] = np.clip(raw, 0.0, 1.0)
 
         # ------------------------------------------------------------------
-        # Write output columns
+        # Write fitness output columns (raw, pre-Hedge)
         # ------------------------------------------------------------------
         mode_order = [
             StrategyMode.TREND_FOLLOWING,
@@ -307,13 +317,42 @@ class FitnessEstimator:
         score_matrix = np.column_stack(
             [mode_scores[m.value] for m in mode_order]
         )
-        best_indices = np.argmax(score_matrix, axis=1)
-        mode_values = np.array([m.value for m in mode_order])
-        active_modes = mode_values[best_indices]
 
         for mode in mode_order:
             df[f"ohio_fitness_{mode.value}"] = mode_scores[mode.value]
 
-        df["ohio_active_mode"] = active_modes
+        # ------------------------------------------------------------------
+        # Hedge-based mode selection
+        # ------------------------------------------------------------------
+        ret = df["close"].pct_change().to_numpy(dtype=np.float64)
+        trend = (
+            df.get("ohio_sv_trend_persistence", pd.Series(0.0, index=df.index))
+            .to_numpy(dtype=np.float64)
+        )
+        atr = (
+            df.get("ohio_feat_atr_ratio_14", pd.Series(0.01, index=df.index))
+            .fillna(0.01)
+            .to_numpy(dtype=np.float64)
+        )
+
+        rewards = _compute_rewards(ret, trend, atr)
+        hedge_weights = _compute_hedge_weights(
+            rewards, self._hedge_eta, self._hedge_weight_floor,
+        )
+
+        # Temperature flatten + Hedge adjust → argmax
+        flattened = np.power(
+            np.maximum(score_matrix, 1e-8),
+            1.0 / self._hedge_temperature,
+        )
+        adjusted = flattened * hedge_weights
+        best_indices = np.argmax(adjusted, axis=1)
+
+        mode_values = np.array([m.value for m in mode_order])
+        df["ohio_active_mode"] = mode_values[best_indices]
+
+        # Hedge weight columns for monitoring
+        for i, mode in enumerate(mode_order):
+            df[f"ohio_hedge_weight_{mode.value}"] = hedge_weights[:, i]
 
         return df
