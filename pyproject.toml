@@ -71,6 +71,7 @@ dependencies = [
   "pytz",
   "packaging",
   "freqtrade-client",
+  "numba>=0.59.0",
 ]
 
 [project.optional-dependencies]

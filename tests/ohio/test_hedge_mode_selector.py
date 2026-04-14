@@ -99,7 +99,6 @@ def _make_ohio_dataframe(n_rows: int = 50, seed: int = 42) -> pd.DataFrame:
         "ohio_meta_confidence": rng.uniform(0.5, 1.0, n_rows),
         "ohio_meta_stability": rng.uniform(0.5, 1.0, n_rows),
         "ohio_feat_atr_ratio_14": rng.uniform(0.005, 0.03, n_rows),
-        "ohio_sv_trend_persistence": rng.uniform(-1.0, 1.0, n_rows),
     })
 
 
@@ -143,7 +142,7 @@ class TestHedgeIntegration:
         rng = np.random.default_rng(99)
         df = pd.DataFrame({
             "close": 100.0 + np.cumsum(np.abs(rng.normal(0.5, 0.1, n))),
-            "ohio_stable_trend": np.full(n, 0.0),
+            "ohio_stable_trend": np.full(n, 0.1),         # near-neutral → MR wins raw fitness
             "ohio_stable_volatility": np.full(n, 0.5),
             "ohio_stable_downside": np.full(n, 0.3),
             "ohio_stable_liquidity": np.full(n, 0.15),
@@ -153,7 +152,6 @@ class TestHedgeIntegration:
             "ohio_meta_confidence": np.full(n, 0.8),
             "ohio_meta_stability": np.full(n, 0.8),
             "ohio_feat_atr_ratio_14": np.full(n, 0.01),
-            "ohio_sv_trend_persistence": np.full(n, 0.8),
         })
         est = FitnessEstimator(hedge_eta=0.1, hedge_temperature=2.0)
         df_out = est.compute_dataframe(df)

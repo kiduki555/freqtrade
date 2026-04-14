@@ -67,10 +67,15 @@ def _compute_rewards(
 ) -> np.ndarray:
     """Compute per-mode rewards from 1-bar return, trend, and ATR.
 
+    TF/MR rewards: directional alignment with trend, normalised by ATR.
+    BO/DEF rewards: |return| vs rolling median of |return| — centred so
+    neither mode is systematically favoured (ATR is too large as threshold:
+    88%+ of bars have |ret| < ATR, which would bias DEF permanently).
+
     Args:
         ret:   1-bar return array (close.pct_change()). NaN → 0 reward.
-        trend: ohio_sv_trend_persistence array.
-        atr:   ohio_feat_atr_ratio_14 array. Used as normalizer.
+        trend: ohio_stable_trend array.
+        atr:   ohio_feat_atr_ratio_14 array. Used as normalizer for TF/MR.
 
     Returns:
         (N, 4) array: columns = [TF, MR, BO, DEF], values in [-1, 1].
@@ -81,10 +86,23 @@ def _compute_rewards(
 
     trend_sign = np.sign(safe_trend)
 
+    # TF/MR: directional — trend continuation vs reversal
     reward_tf = np.clip((safe_ret * trend_sign) / safe_atr, -1.0, 1.0)
     reward_mr = np.clip((-safe_ret * trend_sign) / safe_atr, -1.0, 1.0)
-    reward_bo = np.clip((np.abs(safe_ret) - safe_atr) / safe_atr, -1.0, 1.0)
-    reward_df = np.clip((safe_atr - np.abs(safe_ret)) / safe_atr, -1.0, 1.0)
+
+    # BO/DEF: volatility regime — compare |ret| to its rolling median
+    # This centres rewards: ~50% positive for each (median is the midpoint)
+    abs_ret = np.abs(safe_ret)
+    median_abs_ret = (
+        pd.Series(abs_ret)
+        .rolling(168, min_periods=1)
+        .median()
+        .to_numpy(dtype=np.float64)
+    )
+    median_abs_ret = np.maximum(median_abs_ret, 1e-8)
+
+    reward_bo = np.clip((abs_ret - median_abs_ret) / median_abs_ret, -1.0, 1.0)
+    reward_df = np.clip((median_abs_ret - abs_ret) / median_abs_ret, -1.0, 1.0)
 
     return np.column_stack([reward_tf, reward_mr, reward_bo, reward_df])
 
@@ -93,24 +111,45 @@ def _compute_hedge_weights(
     rewards: np.ndarray,
     eta: float,
     weight_floor: float,
+    lookback: int = 168,
 ) -> np.ndarray:
-    """Compute Hedge algorithm weights from cumulative rewards.
+    """Compute Hedge algorithm weights from rolling cumulative rewards.
 
-    w_i(t) ∝ exp(eta * cumsum(reward_i(1..t))), with per-mode floor.
+    w_i(t) ∝ exp(eta * rolling_sum(reward_i, lookback)), with per-mode floor.
+
+    Uses a rolling window (default 168 bars = 7 days) instead of all-history
+    cumsum to prevent a single mode from dominating over long horizons.
+    Log-sum-exp stabilisation prevents overflow; weight floor is applied
+    *after* normalisation so no mode ever drops below the floor.
 
     Args:
         rewards:      (N, 4) reward array from _compute_rewards.
         eta:          Learning rate. 0.0 → uniform weights.
         weight_floor: Minimum weight per mode (prevents mode death).
+        lookback:     Rolling window size in bars. Default 168 (7 days @ 1h).
 
     Returns:
         (N, 4) array of normalized weights per row, each row sums to 1.0.
     """
-    cum_rewards = np.cumsum(rewards, axis=0)
-    raw_weights = np.exp(eta * cum_rewards)
-    raw_weights = np.maximum(raw_weights, weight_floor)
+    # Rolling sum over lookback window (min_periods=1 for warmup)
+    rolling_rewards = (
+        pd.DataFrame(rewards)
+        .rolling(lookback, min_periods=1)
+        .sum()
+        .to_numpy(dtype=np.float64)
+    )
+    scaled = eta * rolling_rewards
+
+    # Log-sum-exp stabilisation: subtract row max to prevent overflow
+    max_scaled = scaled.max(axis=1, keepdims=True)
+    raw_weights = np.exp(scaled - max_scaled)
+
+    # Normalise → apply floor → re-normalise
     row_sums = raw_weights.sum(axis=1, keepdims=True)
-    return raw_weights / row_sums
+    normalised = raw_weights / row_sums
+    floored = np.maximum(normalised, weight_floor)
+    floored_sums = floored.sum(axis=1, keepdims=True)
+    return floored / floored_sums
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +365,7 @@ class FitnessEstimator:
         # ------------------------------------------------------------------
         ret = df["close"].pct_change().to_numpy(dtype=np.float64)
         trend = (
-            df.get("ohio_sv_trend_persistence", pd.Series(0.0, index=df.index))
+            df.get("ohio_stable_trend", pd.Series(0.0, index=df.index))
             .to_numpy(dtype=np.float64)
         )
         atr = (

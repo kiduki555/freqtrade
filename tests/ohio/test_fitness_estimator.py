@@ -361,7 +361,6 @@ def _make_ohio_dataframe(n_rows: int = 10) -> pd.DataFrame:
             "ohio_meta_confidence": rng.uniform(0.5, 1.0, n_rows),
             "ohio_meta_stability": rng.uniform(0.5, 1.0, n_rows),
             "ohio_feat_atr_ratio_14": rng.uniform(0.005, 0.03, n_rows),
-            "ohio_sv_trend_persistence": rng.uniform(-1.0, 1.0, n_rows),
         }
     )
     return df
@@ -580,7 +579,7 @@ def test_vectorized_matches_scalar_parity(estimator: FitnessEstimator) -> None:
     df = pd.DataFrame(rows)
     df["close"] = 100.0
     df["ohio_feat_atr_ratio_14"] = 0.01
-    df["ohio_sv_trend_persistence"] = 0.0
+    # ohio_stable_trend already in rows; close + atr needed for Hedge reward computation
     df_out = estimator.compute_dataframe(df)
 
     for i, (sv, meta) in enumerate(zip(states, metas)):
