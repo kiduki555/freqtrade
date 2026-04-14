@@ -88,7 +88,11 @@ class OhioThinStrategy(IStrategy):
         self._factor_calculator = FactorCalculator()
         self._stabilizer = StateStabilizer()
         self._meta_calculator = MetaCalculator()
-        self._fitness_estimator = FitnessEstimator()
+        self._fitness_estimator = FitnessEstimator(
+            hedge_eta=0.1,
+            hedge_temperature=2.0,
+            hedge_weight_floor=0.05,
+        )
         self._policy_generator = PolicyGenerator()
 
         # Risk / portfolio

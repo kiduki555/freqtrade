@@ -51,7 +51,7 @@ def _make_strategy(**config_overrides) -> OhioThinStrategy:
         FactorCalculator=lambda: MagicMock(),
         StateStabilizer=lambda: MagicMock(),
         MetaCalculator=lambda: MagicMock(),
-        FitnessEstimator=lambda: MagicMock(),
+        FitnessEstimator=lambda **kw: MagicMock(),
         PolicyGenerator=lambda: MagicMock(),
         DrawdownController=lambda: MagicMock(),
         KillSwitch=lambda: MagicMock(),
