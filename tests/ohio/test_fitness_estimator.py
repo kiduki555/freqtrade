@@ -349,7 +349,7 @@ def _make_ohio_dataframe(n_rows: int = 10) -> pd.DataFrame:
     rng = np.random.default_rng(42)
     df = pd.DataFrame(
         {
-            "close": rng.uniform(100, 200, n_rows),
+            "close": 100.0 + np.cumsum(rng.uniform(-1, 1, n_rows)),
             "ohio_stable_trend": rng.uniform(-1.0, 1.0, n_rows),
             "ohio_stable_volatility": rng.uniform(0.0, 1.0, n_rows),
             "ohio_stable_downside": rng.uniform(0.0, 1.0, n_rows),
@@ -360,6 +360,8 @@ def _make_ohio_dataframe(n_rows: int = 10) -> pd.DataFrame:
             "ohio_meta_transition_risk": rng.uniform(0.0, 1.0, n_rows),
             "ohio_meta_confidence": rng.uniform(0.5, 1.0, n_rows),
             "ohio_meta_stability": rng.uniform(0.5, 1.0, n_rows),
+            "ohio_feat_atr_ratio_14": rng.uniform(0.005, 0.03, n_rows),
+            "ohio_sv_trend_persistence": rng.uniform(-1.0, 1.0, n_rows),
         }
     )
     return df
@@ -375,11 +377,15 @@ def test_compute_dataframe_adds_five_columns(estimator: FitnessEstimator) -> Non
         "ohio_fitness_breakout",
         "ohio_fitness_defensive",
         "ohio_active_mode",
+        "ohio_hedge_weight_trend_following",
+        "ohio_hedge_weight_mean_reversion",
+        "ohio_hedge_weight_breakout",
+        "ohio_hedge_weight_defensive",
     }
     for col in expected_new_cols:
         assert col in df_out.columns, f"Missing column: {col}"
 
-    assert len(df_out.columns) == len(df_in.columns) + 5
+    assert len(df_out.columns) == len(df_in.columns) + 9
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +578,9 @@ def test_vectorized_matches_scalar_parity(estimator: FitnessEstimator) -> None:
             "ohio_meta_stability": meta.stability,
         })
     df = pd.DataFrame(rows)
+    df["close"] = 100.0
+    df["ohio_feat_atr_ratio_14"] = 0.01
+    df["ohio_sv_trend_persistence"] = 0.0
     df_out = estimator.compute_dataframe(df)
 
     for i, (sv, meta) in enumerate(zip(states, metas)):
