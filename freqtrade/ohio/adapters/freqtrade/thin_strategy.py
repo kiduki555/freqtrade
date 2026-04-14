@@ -42,6 +42,7 @@ from freqtrade.ohio.core.portfolio_risk.drawdown_controller import DrawdownContr
 from freqtrade.ohio.core.portfolio_risk.kill_switch import KillSwitch
 from freqtrade.ohio.core.strategy_router.fitness_estimator import FitnessEstimator
 from freqtrade.ohio.core.strategy_router.policy_generator import PolicyGenerator
+from freqtrade.ohio.config.defaults import OhioConfig
 from freqtrade.ohio.core.strategy_router.strategy_profile import load_default_profiles
 
 
@@ -88,10 +89,11 @@ class OhioThinStrategy(IStrategy):
         self._factor_calculator = FactorCalculator()
         self._stabilizer = StateStabilizer()
         self._meta_calculator = MetaCalculator()
+        cfg = OhioConfig()
         self._fitness_estimator = FitnessEstimator(
-            hedge_eta=0.1,
-            hedge_temperature=2.0,
-            hedge_weight_floor=0.05,
+            hedge_eta=cfg.hedge_eta,
+            hedge_temperature=cfg.hedge_temperature,
+            hedge_weight_floor=cfg.hedge_weight_floor,
         )
         self._policy_generator = PolicyGenerator()
 

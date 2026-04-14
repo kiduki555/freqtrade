@@ -64,6 +64,7 @@ def _compute_rewards(
     ret: np.ndarray,
     trend: np.ndarray,
     atr: np.ndarray,
+    lookback: int = 168,
 ) -> np.ndarray:
     """Compute per-mode rewards from 1-bar return, trend, and ATR.
 
@@ -73,9 +74,10 @@ def _compute_rewards(
     88%+ of bars have |ret| < ATR, which would bias DEF permanently).
 
     Args:
-        ret:   1-bar return array (close.pct_change()). NaN → 0 reward.
-        trend: ohio_stable_trend array.
-        atr:   ohio_feat_atr_ratio_14 array. Used as normalizer for TF/MR.
+        ret:      1-bar return array (close.pct_change()). NaN → 0 reward.
+        trend:    ohio_stable_trend array.
+        atr:      ohio_feat_atr_ratio_14 array. Used as normalizer for TF/MR.
+        lookback: Rolling window for BO/DEF median. Default 168 (7 days @ 1h).
 
     Returns:
         (N, 4) array: columns = [TF, MR, BO, DEF], values in [-1, 1].
@@ -95,7 +97,7 @@ def _compute_rewards(
     abs_ret = np.abs(safe_ret)
     median_abs_ret = (
         pd.Series(abs_ret)
-        .rolling(168, min_periods=1)
+        .rolling(lookback, min_periods=1)
         .median()
         .to_numpy(dtype=np.float64)
     )
@@ -120,7 +122,8 @@ def _compute_hedge_weights(
     Uses a rolling window (default 168 bars = 7 days) instead of all-history
     cumsum to prevent a single mode from dominating over long horizons.
     Log-sum-exp stabilisation prevents overflow; weight floor is applied
-    *after* normalisation so no mode ever drops below the floor.
+    *after* normalisation to provide relative uplift (not a hard minimum —
+    re-normalisation shrinks effective floor slightly below the stated value).
 
     Args:
         rewards:      (N, 4) reward array from _compute_rewards.
@@ -193,6 +196,13 @@ class FitnessEstimator:
                                Hedge adjustment. Higher values flatten scores.
             hedge_weight_floor: Minimum weight per mode to prevent mode death.
         """
+        if hedge_temperature <= 0.0:
+            raise ValueError(f"hedge_temperature must be > 0, got {hedge_temperature}")
+        if hedge_eta < 0.0:
+            raise ValueError(f"hedge_eta must be >= 0, got {hedge_eta}")
+        if not (0.0 <= hedge_weight_floor < 0.25):
+            raise ValueError(f"hedge_weight_floor must be in [0, 0.25), got {hedge_weight_floor}")
+
         if profiles is None:
             profiles = load_default_profiles()
         self._profiles: dict[StrategyMode, StrategyProfile] = profiles
@@ -363,6 +373,8 @@ class FitnessEstimator:
         # ------------------------------------------------------------------
         # Hedge-based mode selection
         # ------------------------------------------------------------------
+        if "close" not in df.columns:
+            raise ValueError("DataFrame must contain a 'close' column for Hedge rewards")
         ret = df["close"].pct_change().to_numpy(dtype=np.float64)
         trend = (
             df.get("ohio_stable_trend", pd.Series(0.0, index=df.index))
