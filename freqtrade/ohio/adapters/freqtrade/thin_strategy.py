@@ -8,6 +8,7 @@ Completed in FT-017: all pipeline modules are wired.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timezone
 
 from pandas import DataFrame
@@ -336,7 +337,25 @@ class OhioThinStrategy(IStrategy):
         transition_risk = float(last.get("ohio_meta_transition_risk", 0.0))
         fitness = self._get_best_fitness(last)
 
-        return compute_stoploss(profile, policy, current_profit, transition_risk, fitness)
+        atr_ratio = float(last.get("ohio_feat_atr_ratio_14", 0.0))
+        atr_baseline = float(last.get("ohio_feat_atr_baseline", 0.0))
+
+        # Default to 1.0 if baseline unavailable (warmup/NaN)
+        if (
+            atr_baseline > 0
+            and atr_ratio > 0
+            and not math.isnan(atr_baseline)
+            and not math.isnan(atr_ratio)
+        ):
+            atr_scale = atr_ratio / atr_baseline
+        else:
+            atr_scale = 1.0
+
+        return compute_stoploss(
+            profile, policy, current_profit, transition_risk, fitness,
+            atr_scale=atr_scale,
+            atr_ratio=atr_ratio,
+        )
 
     # ------------------------------------------------------------------
     # custom_exit — Multi-condition Exit
