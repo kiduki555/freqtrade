@@ -1,0 +1,36 @@
+name: Breakout
+mode: breakout
+description: >
+  Captures explosive directional moves at volatility inflection points.
+  Prefers high or expanding volatility with strong relative strength.
+  Avoids high cross-asset correlation which dilutes breakout signals.
+  Uses breakeven stops and higher leverage to capitalise on momentum.
+
+preferences:
+  volatility_level:
+    weight: 0.28
+    ideal: 0.75        # high/expanding volatility fuels breakouts
+  relative_strength:
+    weight: 0.25
+    ideal: 0.80        # strong outperformer — breakout leader
+  trend_persistence:
+    weight: 0.18
+    ideal: 0.60        # early trend — breakout initiating momentum
+  breadth_dispersion:
+    weight: 0.12
+    ideal: 0.70        # high dispersion means individual breakouts
+  downside_pressure:
+    weight: 0.08
+    ideal: 0.20        # limited downside in the breakout direction
+  correlation_stress:
+    weight: 0.06
+    ideal: 0.20        # low correlation — asset moving independently
+  liquidity_stress:
+    weight: 0.03
+    ideal: 0.15        # adequate liquidity for explosive entries
+
+meta_confidence_weight: 0.05
+meta_stability_weight: 0.05
+
+stoploss_range: [-0.15, -0.10]   # breakeven — wide initial stop, move to breakeven fast
+leverage_range: [2.0, 4.0]

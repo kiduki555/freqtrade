@@ -1,0 +1,35 @@
+name: Mean Reversion
+mode: mean_reversion
+description: >
+  Fades short-term extremes back toward the mean. Prefers moderate, choppy
+  volatility with minimal persistent trend. Avoids extreme trending conditions
+  in either direction. Uses fixed stops and conservative leverage.
+
+preferences:
+  trend_persistence:
+    weight: 0.30
+    ideal: 0.00        # no persistent trend — mean-reversion requires choppiness
+  volatility_level:
+    weight: 0.25
+    ideal: 0.50        # moderate volatility creates overshoots to fade
+  downside_pressure:
+    weight: 0.15
+    ideal: 0.30        # some downside creates reversion opportunities
+  relative_strength:
+    weight: 0.10
+    ideal: 0.50        # neutral relative strength
+  liquidity_stress:
+    weight: 0.10
+    ideal: 0.20        # low liquidity stress for smooth mean reversion
+  breadth_dispersion:
+    weight: 0.07
+    ideal: 0.50        # dispersion creates individual reversion chances
+  correlation_stress:
+    weight: 0.03
+    ideal: 0.30        # low correlation stress preferred
+
+meta_confidence_weight: 0.05
+meta_stability_weight: 0.05
+
+stoploss_range: [-0.08, -0.05]   # fixed — tighter since mean reversion is short-term
+leverage_range: [1.0, 2.0]

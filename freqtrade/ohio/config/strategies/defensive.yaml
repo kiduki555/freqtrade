@@ -1,0 +1,36 @@
+name: Defensive
+mode: defensive
+description: >
+  Capital preservation mode for adverse market conditions. Seeks low
+  volatility, minimal downside pressure, and high state stability.
+  Avoids high volatility and downside pressure. Uses tight stops and
+  minimal leverage (1x only) to limit losses.
+
+preferences:
+  downside_pressure:
+    weight: 0.30
+    ideal: 0.05        # near-zero downside pressure
+  volatility_level:
+    weight: 0.25
+    ideal: 0.15        # very low volatility — calm markets
+  liquidity_stress:
+    weight: 0.18
+    ideal: 0.10        # high liquidity needed for safe exits
+  correlation_stress:
+    weight: 0.12
+    ideal: 0.20        # low correlation stress — orderly markets
+  trend_persistence:
+    weight: 0.08
+    ideal: 0.00        # flat/sideways — not chasing trends in risky env
+  relative_strength:
+    weight: 0.05
+    ideal: 0.50        # neutral relative strength acceptable
+  breadth_dispersion:
+    weight: 0.02
+    ideal: 0.20        # low dispersion — broad market stability
+
+meta_confidence_weight: 0.08   # slightly higher than others — only act when data is reliable
+meta_stability_weight: 0.07    # slightly higher than others — state must be settled
+
+stoploss_range: [-0.05, -0.03]  # tight — minimum loss tolerance
+leverage_range: [1.0, 1.0]      # 1x only — no amplification in defensive mode
