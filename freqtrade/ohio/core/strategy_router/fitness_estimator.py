@@ -56,6 +56,64 @@ _META_COL_TO_FIELD: Final[dict[str, str]] = {
 
 
 # ---------------------------------------------------------------------------
+# Reward computation for Hedge mode selection
+# ---------------------------------------------------------------------------
+
+
+def _compute_rewards(
+    ret: np.ndarray,
+    trend: np.ndarray,
+    atr: np.ndarray,
+) -> np.ndarray:
+    """Compute per-mode rewards from 1-bar return, trend, and ATR.
+
+    Args:
+        ret:   1-bar return array (close.pct_change()). NaN → 0 reward.
+        trend: ohio_sv_trend_persistence array.
+        atr:   ohio_feat_atr_ratio_14 array. Used as normalizer.
+
+    Returns:
+        (N, 4) array: columns = [TF, MR, BO, DEF], values in [-1, 1].
+    """
+    safe_ret = np.nan_to_num(ret, nan=0.0)
+    safe_trend = np.nan_to_num(trend, nan=0.0)
+    safe_atr = np.maximum(np.nan_to_num(atr, nan=0.01), 1e-8)
+
+    trend_sign = np.sign(safe_trend)
+
+    reward_tf = np.clip((safe_ret * trend_sign) / safe_atr, -1.0, 1.0)
+    reward_mr = np.clip((-safe_ret * trend_sign) / safe_atr, -1.0, 1.0)
+    reward_bo = np.clip((np.abs(safe_ret) - safe_atr) / safe_atr, -1.0, 1.0)
+    reward_df = np.clip((safe_atr - np.abs(safe_ret)) / safe_atr, -1.0, 1.0)
+
+    return np.column_stack([reward_tf, reward_mr, reward_bo, reward_df])
+
+
+def _compute_hedge_weights(
+    rewards: np.ndarray,
+    eta: float,
+    weight_floor: float,
+) -> np.ndarray:
+    """Compute Hedge algorithm weights from cumulative rewards.
+
+    w_i(t) ∝ exp(eta * cumsum(reward_i(1..t))), with per-mode floor.
+
+    Args:
+        rewards:      (N, 4) reward array from _compute_rewards.
+        eta:          Learning rate. 0.0 → uniform weights.
+        weight_floor: Minimum weight per mode (prevents mode death).
+
+    Returns:
+        (N, 4) array of normalized weights per row, each row sums to 1.0.
+    """
+    cum_rewards = np.cumsum(rewards, axis=0)
+    raw_weights = np.exp(eta * cum_rewards)
+    raw_weights = np.maximum(raw_weights, weight_floor)
+    row_sums = raw_weights.sum(axis=1, keepdims=True)
+    return raw_weights / row_sums
+
+
+# ---------------------------------------------------------------------------
 # FitnessEstimator
 # ---------------------------------------------------------------------------
 
