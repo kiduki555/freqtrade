@@ -1,4 +1,4 @@
-"""Feature builder: extract 18 primitive per-symbol features from OHLCV 1h candles.
+"""Feature builder: extract 19 primitive per-symbol features from OHLCV 1h candles.
 
 These raw features feed into 7 factor calculators (trend, volatility, downside,
 liquidity, relative_strength, correlation, breadth).  All computations are
@@ -33,10 +33,11 @@ FEATURE_COLUMNS: list[str] = [
     "ohio_feat_ma_slope_20",
     "ohio_feat_adx_14",
     "ohio_feat_efficiency_ratio_24",
-    # Volatility (3)
+    # Volatility (4)
     "ohio_feat_realized_vol_24",
     "ohio_feat_atr_ratio_14",
     "ohio_feat_parkinson_vol_24",
+    "ohio_feat_atr_baseline",
     # Downside (5)
     "ohio_feat_sortino_downside_24",
     "ohio_feat_max_drawdown_24",
@@ -71,7 +72,7 @@ class FeatureBuilder:
     _ADX_ALPHA: float = 1.0 / 14
 
     def compute(self, dataframe: pd.DataFrame) -> pd.DataFrame:
-        """Append 18 ``ohio_feat_*`` columns to *dataframe* and return it.
+        """Append 19 ``ohio_feat_*`` columns to *dataframe* and return it.
 
         Args:
             dataframe: Standard Freqtrade OHLCV DataFrame with columns
@@ -188,6 +189,11 @@ class FeatureBuilder:
         df["ohio_feat_parkinson_vol_24"] = np.sqrt(
             log_hl_sq.rolling(window=24).mean() / (4 * ln2)
         )
+
+        # ATR baseline: 168h (7-day) rolling median for stoploss scaling
+        df["ohio_feat_atr_baseline"] = df["ohio_feat_atr_ratio_14"].rolling(
+            window=168, min_periods=168
+        ).median()
 
     # ------------------------------------------------------------------
     # Downside features

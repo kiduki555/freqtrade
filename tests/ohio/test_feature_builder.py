@@ -1,4 +1,4 @@
-"""Tests for FeatureBuilder — 18 primitive per-symbol OHLCV features.
+"""Tests for FeatureBuilder — 19 primitive per-symbol OHLCV features.
 
 Covers:
 - Column presence and naming conventions
@@ -360,3 +360,37 @@ def test_large_dataframe_no_exception(builder: FeatureBuilder) -> None:
     assert len(result) == 500
     for col in FEATURE_COLUMNS:
         assert col in result.columns
+
+
+# ---------------------------------------------------------------------------
+# Test 21 — ATR baseline (168h rolling median of atr_ratio_14)
+# ---------------------------------------------------------------------------
+
+
+class TestAtrBaseline:
+    def test_atr_baseline_computed(self) -> None:
+        """ohio_feat_atr_baseline is the 168h rolling median of atr_ratio_14."""
+        builder = FeatureBuilder()
+        df = _make_ohlcv(200)
+        df = builder.compute(df)
+        assert "ohio_feat_atr_baseline" in df.columns
+        assert not pd.isna(df["ohio_feat_atr_baseline"].iloc[-1])
+
+    def test_atr_baseline_nan_during_warmup(self) -> None:
+        """First 168 bars should have NaN baseline."""
+        builder = FeatureBuilder()
+        df = _make_ohlcv(200)
+        df = builder.compute(df)
+        assert pd.isna(df["ohio_feat_atr_baseline"].iloc[100])
+
+    def test_atr_baseline_non_negative(self) -> None:
+        """ATR baseline must be non-negative (it is a ratio of positive values)."""
+        builder = FeatureBuilder()
+        df = _make_ohlcv(200)
+        df = builder.compute(df)
+        valid = df["ohio_feat_atr_baseline"].dropna()
+        assert (valid >= 0).all(), "ATR baseline must be non-negative"
+
+    def test_atr_baseline_in_feature_columns(self) -> None:
+        """ohio_feat_atr_baseline must be listed in FEATURE_COLUMNS."""
+        assert "ohio_feat_atr_baseline" in FEATURE_COLUMNS
