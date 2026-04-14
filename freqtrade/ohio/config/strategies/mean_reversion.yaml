@@ -33,3 +33,6 @@ meta_stability_weight: 0.05
 
 stoploss_range: [-0.08, -0.05]   # fixed — tighter since mean reversion is short-term
 leverage_range: [1.0, 2.0]
+atr_stop_direction: widen
+atr_scale_cap: 2.0
+chandelier_enabled: false

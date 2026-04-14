@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -74,6 +74,35 @@ class StrategyProfile(BaseModel):
     meta_stability_weight: float = 0.10
     stoploss_range: tuple[float, float]  # (min, max) — both negative; TODO(FT-015): consumed by ExitAdapter
     leverage_range: tuple[float, float]  # (min, max) — both positive; TODO(FT-017): consumed by EntryAdapter
+
+    # ATR scaling direction for dynamic stoploss (regime-adaptive)
+    atr_stop_direction: Literal["tighten", "widen"] = "tighten"
+    atr_scale_cap: float = 2.0
+    # Chandelier trailing stop parameters
+    chandelier_enabled: bool = False
+    chandelier_multiplier: float = 2.5
+    chandelier_activation: float = 0.02
+
+    @field_validator("atr_scale_cap")
+    @classmethod
+    def atr_scale_cap_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"atr_scale_cap must be positive, got {v}")
+        return v
+
+    @field_validator("chandelier_multiplier")
+    @classmethod
+    def chandelier_multiplier_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"chandelier_multiplier must be positive, got {v}")
+        return v
+
+    @field_validator("chandelier_activation")
+    @classmethod
+    def chandelier_activation_range(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"chandelier_activation must be in [0, 1], got {v}")
+        return v
 
     @field_validator("preferences")
     @classmethod

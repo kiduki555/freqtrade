@@ -34,3 +34,8 @@ meta_stability_weight: 0.05
 
 stoploss_range: [-0.15, -0.10]   # breakeven — wide initial stop, move to breakeven fast
 leverage_range: [2.0, 4.0]
+atr_stop_direction: tighten
+atr_scale_cap: 2.0
+chandelier_enabled: true
+chandelier_multiplier: 2.0
+chandelier_activation: 0.015

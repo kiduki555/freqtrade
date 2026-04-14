@@ -33,3 +33,8 @@ meta_stability_weight: 0.05
 
 stoploss_range: [-0.12, -0.08]   # trailing — wider to let trends breathe
 leverage_range: [2.0, 3.0]
+atr_stop_direction: tighten
+atr_scale_cap: 2.0
+chandelier_enabled: true
+chandelier_multiplier: 2.5
+chandelier_activation: 0.02

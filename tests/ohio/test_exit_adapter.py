@@ -220,6 +220,44 @@ class TestComputeExitPriority:
 # No Freqtrade imports (AST check)
 # ===================================================================
 
+class TestProfileNewFields:
+    def test_trend_following_has_atr_fields(self):
+        from freqtrade.ohio.core.strategy_router.strategy_profile import load_default_profiles
+        from freqtrade.ohio.core.domain.models import StrategyMode
+        profiles = load_default_profiles()
+        tf = profiles[StrategyMode.TREND_FOLLOWING]
+        assert tf.atr_stop_direction == "tighten"
+        assert tf.atr_scale_cap == 2.0
+        assert tf.chandelier_enabled is True
+        assert tf.chandelier_multiplier == 2.5
+        assert tf.chandelier_activation == 0.02
+
+    def test_mean_reversion_widens(self):
+        from freqtrade.ohio.core.strategy_router.strategy_profile import load_default_profiles
+        from freqtrade.ohio.core.domain.models import StrategyMode
+        profiles = load_default_profiles()
+        mr = profiles[StrategyMode.MEAN_REVERSION]
+        assert mr.atr_stop_direction == "widen"
+        assert mr.chandelier_enabled is False
+
+    def test_breakout_chandelier(self):
+        from freqtrade.ohio.core.strategy_router.strategy_profile import load_default_profiles
+        from freqtrade.ohio.core.domain.models import StrategyMode
+        profiles = load_default_profiles()
+        bo = profiles[StrategyMode.BREAKOUT]
+        assert bo.chandelier_enabled is True
+        assert bo.chandelier_multiplier == 2.0
+        assert bo.chandelier_activation == 0.015
+
+    def test_defensive_no_chandelier(self):
+        from freqtrade.ohio.core.strategy_router.strategy_profile import load_default_profiles
+        from freqtrade.ohio.core.domain.models import StrategyMode
+        profiles = load_default_profiles()
+        d = profiles[StrategyMode.DEFENSIVE]
+        assert d.atr_stop_direction == "tighten"
+        assert d.chandelier_enabled is False
+
+
 class TestNoFreqtradeImports:
     def test_exit_adapter_has_no_ft_imports(self):
         src_path = (
