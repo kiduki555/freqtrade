@@ -25,6 +25,7 @@ from freqtrade.ohio.adapters.freqtrade.cross_asset_provider import (
     compute_peer_returns,
     fetch_peer_closes,
 )
+from freqtrade.ohio.adapters.freqtrade.entry_adapter import EntryAdapter
 from freqtrade.ohio.adapters.freqtrade.exit_adapter import (
     ExitParams,
     compute_exit,
@@ -106,6 +107,30 @@ class OhioThinStrategy(IStrategy):
     # the tail of the old regime.  0 disables the gate.
     regime_cooldown_bars = IntParameter(0, 10, default=3, space="buy", optimize=True)
 
+    # --- Mode-specific entry parameters (buy space) ---
+
+    # Trend Following (TSMOM + KAMA + ADX + Hurst)
+    tf_adx_threshold = DecimalParameter(15.0, 40.0, default=25.0, decimals=1, space="buy", optimize=True)
+    tf_hurst_threshold = DecimalParameter(0.45, 0.70, default=0.55, decimals=2, space="buy", optimize=True)
+    tf_kama_slope_threshold = DecimalParameter(0.0001, 0.005, default=0.001, decimals=4, space="buy", optimize=True)
+    tf_vol_scale_target = DecimalParameter(0.5, 2.0, default=1.0, decimals=1, space="buy", optimize=True)
+
+    # Mean Reversion (Z-score + Hurst gate + BB + RSI)
+    mr_zscore_entry = DecimalParameter(1.5, 3.0, default=2.0, decimals=1, space="buy", optimize=True)
+    mr_rsi_oversold = IntParameter(20, 40, default=30, space="buy", optimize=True)
+    mr_rsi_overbought = IntParameter(60, 80, default=70, space="buy", optimize=True)
+    mr_hurst_max = DecimalParameter(0.35, 0.55, default=0.45, decimals=2, space="buy", optimize=True)
+
+    # Breakout (Bollinger Squeeze + Donchian + Volume)
+    bo_squeeze_min_bars = IntParameter(3, 10, default=6, space="buy", optimize=True)
+    bo_volume_mult = DecimalParameter(1.2, 2.5, default=1.5, decimals=1, space="buy", optimize=True)
+    bo_donchian_window = IntParameter(10, 30, default=20, space="buy", optimize=True)
+
+    # Defensive (vol-targeting + low-ADX gate)
+    def_adx_max = DecimalParameter(15.0, 30.0, default=20.0, decimals=1, space="buy", optimize=True)
+    def_vol_scale = DecimalParameter(0.05, 0.30, default=0.15, decimals=2, space="buy", optimize=True)
+    def_min_trend_abs = DecimalParameter(0.01, 0.10, default=0.03, decimals=2, space="buy", optimize=True)
+
     # Exit — timing
     time_exit_bars = IntParameter(6, 48, default=12, space="sell", optimize=True)
     time_exit_fitness = DecimalParameter(0.20, 0.55, default=0.40, decimals=2, space="sell", optimize=True)
@@ -150,6 +175,9 @@ class OhioThinStrategy(IStrategy):
 
         # Strategy profiles
         self._profiles = load_default_profiles()
+
+        # Mode-specific entry adapter
+        self._entry_adapter = EntryAdapter()
 
     # ------------------------------------------------------------------
     # populate_indicators — Full 7-Phase Pipeline
@@ -222,7 +250,7 @@ class OhioThinStrategy(IStrategy):
     # populate_entry_trend — Fitness-based Entry Signals
     # ------------------------------------------------------------------
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        """Generate entry signals based on ohio_active_mode + trend direction."""
+        """Generate entry signals via mode-specific EntryAdapter strategies."""
         logger.info("ohio.populate_entry_trend | pair=%s", metadata["pair"])
         dataframe["enter_long"] = 0
         dataframe["enter_short"] = 0
@@ -231,7 +259,6 @@ class OhioThinStrategy(IStrategy):
         # Entry condition: policy enabled
         enabled = dataframe["ohio_policy_enabled"] == True  # noqa: E712
         active = dataframe["ohio_active_mode"]
-        trend = dataframe.get("ohio_stable_trend", pd.Series(0.0, index=dataframe.index))
 
         # Fitness gate: active mode fitness must exceed disabled_threshold + entry_adj
         threshold = self.disabled_threshold.value
@@ -255,36 +282,37 @@ class OhioThinStrategy(IStrategy):
             )
         fitness_gate = fitness.fillna(0.0) >= (threshold + entry_adj)
 
-        # Minimum directional confidence gate: |trend| >= min_trend_confidence
-        min_conf = self.min_trend_confidence.value
-        direction_gate = trend.abs() >= min_conf
-
-        entry_mask = enabled.fillna(False) & fitness_gate & direction_gate
-
         # Regime maturity cooldown gate.
-        # After a regime switch the detector lags reality by several bars
-        # (Ang & Timmermann 2012).  Block entries until the current regime has
-        # been active for at least `regime_cooldown_bars` consecutive bars.
         cooldown = self.regime_cooldown_bars.value
+        cooldown_gate = pd.Series(True, index=dataframe.index)
         if cooldown > 0:
             mode_changed = active != active.shift(1)
-            # cumsum() creates a group-id that increments on every switch.
-            # cumcount() within each group gives the 0-based age in that regime.
             regime_group = mode_changed.cumsum()
             regime_age = regime_group.groupby(regime_group).cumcount()
-            entry_mask = entry_mask & (regime_age >= cooldown)
+            cooldown_gate = regime_age >= cooldown
 
-        long_mask = entry_mask & (trend >= 0)
-        short_mask = entry_mask & (trend < 0)
+        base_mask = enabled.fillna(False) & fitness_gate & cooldown_gate
 
-        dataframe.loc[long_mask, "enter_long"] = 1
-        dataframe.loc[long_mask, "enter_tag"] = (
-            "ohio_" + active[long_mask].astype(str)
-        )
-        dataframe.loc[short_mask, "enter_short"] = 1
-        dataframe.loc[short_mask, "enter_tag"] = (
-            "ohio_" + active[short_mask].astype(str) + "_short"
-        )
+        # --- Mode-specific entry via EntryAdapter ---
+        entry_params = self._entry_params_dict()
+        for mode in ["trend_following", "mean_reversion", "breakout", "defensive"]:
+            mode_rows = active == mode
+            if not mode_rows.any():
+                continue
+
+            # Run mode-specific strategy on the full dataframe (vectorized)
+            # then mask to only rows where this mode is active
+            mode_df = dataframe.copy()
+            mode_df = self._entry_adapter.compute_entries(mode_df, mode, entry_params)
+
+            mode_mask = base_mask & mode_rows
+            long_mask = mode_mask & (mode_df["enter_long"] == 1)
+            short_mask = mode_mask & (mode_df["enter_short"] == 1)
+
+            dataframe.loc[long_mask, "enter_long"] = 1
+            dataframe.loc[long_mask, "enter_tag"] = f"ohio_{mode}"
+            dataframe.loc[short_mask, "enter_short"] = 1
+            dataframe.loc[short_mask, "enter_tag"] = f"ohio_{mode}_short"
 
         return dataframe
 
@@ -533,6 +561,29 @@ class OhioThinStrategy(IStrategy):
     # ==================================================================
     # Helper methods
     # ==================================================================
+
+    def _entry_params_dict(self) -> dict[str, float]:
+        """Build entry params dict from current hyperopt parameter values."""
+        return {
+            # Trend Following
+            "tf_adx_threshold": self.tf_adx_threshold.value,
+            "tf_hurst_threshold": self.tf_hurst_threshold.value,
+            "tf_kama_slope_threshold": self.tf_kama_slope_threshold.value,
+            "tf_vol_scale_target": self.tf_vol_scale_target.value,
+            # Mean Reversion
+            "mr_zscore_entry": self.mr_zscore_entry.value,
+            "mr_rsi_oversold": float(self.mr_rsi_oversold.value),
+            "mr_rsi_overbought": float(self.mr_rsi_overbought.value),
+            "mr_hurst_max": self.mr_hurst_max.value,
+            # Breakout
+            "bo_squeeze_min_bars": float(self.bo_squeeze_min_bars.value),
+            "bo_volume_mult": self.bo_volume_mult.value,
+            "bo_donchian_window": float(self.bo_donchian_window.value),
+            # Defensive
+            "def_adx_max": self.def_adx_max.value,
+            "def_vol_scale": self.def_vol_scale.value,
+            "def_min_trend_abs": self.def_min_trend_abs.value,
+        }
 
     def _exit_params(self) -> ExitParams:
         """Build ExitParams from current hyperopt parameter values."""

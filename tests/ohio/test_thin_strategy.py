@@ -107,6 +107,20 @@ def _ohio_dataframe(n: int = 3, **overrides) -> pd.DataFrame:
         "ohio_fitness_defensive": [0.55] * n,
         # default trend: positive and above min_trend_confidence (0.10)
         "ohio_stable_trend": [0.50] * n,
+        # Mode-specific entry features — defaults satisfy TrendFollowing conditions
+        "ohio_feat_adx_14": [35.0] * n,           # > tf_adx_threshold (25)
+        "ohio_feat_hurst_168": [0.65] * n,         # > tf_hurst_threshold (0.55)
+        "ohio_feat_kama_slope": [0.003] * n,       # > tf_kama_slope_threshold (0.001)
+        "ohio_feat_zscore_20": [0.0] * n,
+        "ohio_feat_rsi_14": [50.0] * n,
+        "ohio_feat_bb_upper_20": [110.0] * n,
+        "ohio_feat_bb_lower_20": [90.0] * n,
+        "ohio_feat_kc_upper_20": [112.0] * n,
+        "ohio_feat_kc_lower_20": [88.0] * n,
+        "ohio_feat_donchian_upper_20": [108.0] * n,
+        "ohio_feat_donchian_lower_20": [92.0] * n,
+        "ohio_feat_squeeze_count": [0.0] * n,
+        "ohio_feat_volume_sma_20": [1000.0] * n,
     }
     base.update(overrides)
     return pd.DataFrame(base)
@@ -339,6 +353,8 @@ class TestPopulateEntryTrend:
             3,
             ohio_policy_enabled=[True, True, True],
             ohio_stable_trend=[-0.5, 0.3, -0.8],
+            # TF needs negative kama_slope for short entries
+            ohio_feat_kama_slope=[-0.003, 0.003, -0.003],
         )
         result = strategy.populate_entry_trend(df, {"pair": "BTC/USDT"})
         assert result["enter_short"].iloc[0] == 1
@@ -366,21 +382,23 @@ class TestPopulateEntryTrend:
         assert result["enter_long"].iloc[2] == 1
 
     def test_filters_by_min_trend_confidence(self, strategy):
-        """Entries should be blocked when |trend| < min_trend_confidence."""
+        """TF strategy blocks entry when trend is weak (kama_slope near zero)."""
         df = _ohio_dataframe(
             4,
             ohio_policy_enabled=[True, True, True, True],
             ohio_stable_trend=[0.05, 0.20, -0.03, -0.15],
             ohio_fitness_trend_following=[0.80, 0.80, 0.80, 0.80],
+            # KAMA slope mirrors trend direction for TF entry logic
+            ohio_feat_kama_slope=[0.0001, 0.003, -0.0001, -0.003],
         )
-        # Row 0: |trend|=0.05 < 0.10 → blocked
-        # Row 1: |trend|=0.20 >= 0.10 → enter_long
-        # Row 2: |trend|=0.03 < 0.10 → blocked
-        # Row 3: |trend|=0.15 >= 0.10 → enter_short
+        # Row 0: trend=0.05 > 0 but kama_slope=0.0001 < 0.001 → blocked
+        # Row 1: trend=0.20, kama_slope=0.003 > 0.001 → enter_long
+        # Row 2: trend=-0.03, kama_slope=-0.0001 → abs < 0.001 → blocked
+        # Row 3: trend=-0.15, kama_slope=-0.003 → enter_short
         result = strategy.populate_entry_trend(df, {"pair": "BTC/USDT"})
-        assert result["enter_long"].iloc[0] == 0   # too weak trend
+        assert result["enter_long"].iloc[0] == 0   # kama_slope too weak
         assert result["enter_long"].iloc[1] == 1
-        assert result["enter_short"].iloc[2] == 0  # too weak trend
+        assert result["enter_short"].iloc[2] == 0  # kama_slope too weak
         assert result["enter_short"].iloc[3] == 1
 
     def test_no_entry_when_all_filters_fail(self, strategy):
