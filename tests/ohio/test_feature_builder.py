@@ -397,3 +397,150 @@ class TestAtrBaseline:
     def test_atr_baseline_in_feature_columns(self) -> None:
         """ohio_feat_atr_baseline must be listed in FEATURE_COLUMNS."""
         assert "ohio_feat_atr_baseline" in FEATURE_COLUMNS
+
+
+# ---------------------------------------------------------------------------
+# Test 22 — Hurst exponent via R/S analysis
+# ---------------------------------------------------------------------------
+
+
+class TestHurstExponent:
+    def test_hurst_column_exists(self, df_normal: pd.DataFrame) -> None:
+        """ohio_feat_hurst_168 must be present after compute()."""
+        assert "ohio_feat_hurst_168" in df_normal.columns
+
+    def test_hurst_in_feature_columns(self) -> None:
+        assert "ohio_feat_hurst_168" in FEATURE_COLUMNS
+
+    def test_hurst_nan_during_warmup(self, df_normal: pd.DataFrame) -> None:
+        """First 168 bars should be NaN (window=168)."""
+        series = df_normal["ohio_feat_hurst_168"]
+        assert series.iloc[:168].isna().all(), "Hurst warmup (168 bars) should be NaN"
+
+    def test_hurst_has_values_after_warmup(self, df_normal: pd.DataFrame) -> None:
+        series = df_normal["ohio_feat_hurst_168"]
+        assert series.iloc[168:].notna().any(), "Should have values after warmup"
+
+    def test_hurst_range(self) -> None:
+        """Hurst exponent should typically be in [0, 1] for financial series."""
+        builder = FeatureBuilder()
+        df = _make_ohlcv(400)
+        df = builder.compute(df)
+        valid = df["ohio_feat_hurst_168"].dropna()
+        assert len(valid) > 0, "Should have computed Hurst values"
+        assert (valid >= 0.0).all(), f"Hurst min={valid.min():.4f}, expected >= 0"
+        assert (valid <= 1.2).all(), f"Hurst max={valid.max():.4f}, expected <= 1.2"
+
+    def test_hurst_trending_series(self) -> None:
+        """Strong uptrend should produce Hurst > 0.5 (persistent)."""
+        n = 400
+        closes = 100.0 + np.arange(n) * 0.5  # strong linear uptrend
+        noise = np.random.default_rng(42).normal(0, 0.05, n)
+        closes = closes + noise
+        opens = np.roll(closes, 1)
+        opens[0] = closes[0]
+        df = pd.DataFrame({
+            "open": opens,
+            "high": closes * 1.002,
+            "low": closes * 0.998,
+            "close": closes,
+            "volume": np.full(n, 1000.0),
+        })
+        builder = FeatureBuilder()
+        df = builder.compute(df)
+        valid = df["ohio_feat_hurst_168"].dropna()
+        median_h = valid.median()
+        assert median_h > 0.5, f"Trending series Hurst median={median_h:.3f}, expected > 0.5"
+
+    def test_hurst_flat_series_is_nan(self, df_flat: pd.DataFrame) -> None:
+        """Flat price → std=0 → Hurst should be NaN (invalid)."""
+        valid = df_flat["ohio_feat_hurst_168"].dropna()
+        # Flat price has zero returns → std < 1e-12 → skip → all NaN
+        assert len(valid) == 0, "Flat series should produce all-NaN Hurst"
+
+
+# ---------------------------------------------------------------------------
+# Test 23 — Entry indicator features (12 new columns)
+# ---------------------------------------------------------------------------
+
+NEW_FEATURE_COLUMNS = [
+    "ohio_feat_zscore_20",
+    "ohio_feat_rsi_14",
+    "ohio_feat_kama_10",
+    "ohio_feat_kama_slope",
+    "ohio_feat_bb_upper_20",
+    "ohio_feat_bb_lower_20",
+    "ohio_feat_kc_upper_20",
+    "ohio_feat_kc_lower_20",
+    "ohio_feat_donchian_upper_20",
+    "ohio_feat_donchian_lower_20",
+    "ohio_feat_squeeze_count",
+    "ohio_feat_volume_sma_20",
+]
+
+
+class TestEntryIndicatorFeatures:
+    """Tests for the 12 entry strategy indicator features."""
+
+    def test_new_columns_present(self, df_normal: pd.DataFrame) -> None:
+        for col in NEW_FEATURE_COLUMNS:
+            assert col in df_normal.columns, f"Missing column: {col}"
+
+    def test_new_columns_in_feature_columns(self) -> None:
+        for col in NEW_FEATURE_COLUMNS:
+            assert col in FEATURE_COLUMNS, f"{col} not in FEATURE_COLUMNS"
+
+    def test_zscore_centered_near_zero(self, df_normal: pd.DataFrame) -> None:
+        valid = df_normal["ohio_feat_zscore_20"].dropna()
+        assert abs(valid.mean()) < 1.0, "Z-score should be roughly centered"
+
+    def test_rsi_in_range(self, df_normal: pd.DataFrame) -> None:
+        valid = df_normal["ohio_feat_rsi_14"].dropna()
+        assert (valid >= 0).all(), "RSI must be >= 0"
+        assert (valid <= 100 + 1e-9).all(), "RSI must be <= 100"
+
+    def test_rsi_warmup(self, df_normal: pd.DataFrame) -> None:
+        series = df_normal["ohio_feat_rsi_14"]
+        # close.diff() produces NaN at index 0; ewm(min_periods=14) needs 14
+        # valid values, so first non-NaN RSI appears at index 13 (0-based).
+        assert series.iloc[:13].isna().all(), "RSI first 13 bars should be NaN"
+
+    def test_kama_follows_price(self, df_normal: pd.DataFrame) -> None:
+        valid_idx = df_normal["ohio_feat_kama_10"].dropna().index
+        valid_kama = df_normal.loc[valid_idx, "ohio_feat_kama_10"]
+        valid_close = df_normal.loc[valid_idx, "close"]
+        corr = valid_kama.corr(valid_close)
+        assert corr > 0.9, f"KAMA should track close, corr={corr:.3f}"
+
+    def test_bb_upper_above_lower(self, df_normal: pd.DataFrame) -> None:
+        mask = df_normal["ohio_feat_bb_upper_20"].notna()
+        upper = df_normal.loc[mask, "ohio_feat_bb_upper_20"]
+        lower = df_normal.loc[mask, "ohio_feat_bb_lower_20"]
+        assert (upper >= lower).all(), "BB upper must be >= lower"
+
+    def test_kc_upper_above_lower(self, df_normal: pd.DataFrame) -> None:
+        mask = df_normal["ohio_feat_kc_upper_20"].notna()
+        upper = df_normal.loc[mask, "ohio_feat_kc_upper_20"]
+        lower = df_normal.loc[mask, "ohio_feat_kc_lower_20"]
+        assert (upper >= lower).all(), "KC upper must be >= lower"
+
+    def test_donchian_upper_above_lower(self, df_normal: pd.DataFrame) -> None:
+        mask = df_normal["ohio_feat_donchian_upper_20"].notna()
+        upper = df_normal.loc[mask, "ohio_feat_donchian_upper_20"]
+        lower = df_normal.loc[mask, "ohio_feat_donchian_lower_20"]
+        assert (upper >= lower).all(), "Donchian upper must be >= lower"
+
+    def test_squeeze_count_non_negative(self, df_normal: pd.DataFrame) -> None:
+        valid = df_normal["ohio_feat_squeeze_count"].dropna()
+        assert (valid >= 0).all(), "Squeeze count must be >= 0"
+
+    def test_volume_sma_positive(self, df_normal: pd.DataFrame) -> None:
+        valid = df_normal["ohio_feat_volume_sma_20"].dropna()
+        assert (valid > 0).all(), "Volume SMA must be positive"
+
+    def test_flat_price_zscore_zero(self, df_flat: pd.DataFrame) -> None:
+        valid = df_flat["ohio_feat_zscore_20"].dropna()
+        # Flat price → close == SMA → zscore = 0, but std = 0 → NaN
+        # So valid might be empty, which is also acceptable
+        if len(valid) > 0:
+            assert (valid.abs() < 1e-9).all(), "Z-score should be 0 for flat prices"
