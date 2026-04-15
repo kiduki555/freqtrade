@@ -240,9 +240,12 @@ def test_rs_raw_is_all_nan(df_normal: pd.DataFrame) -> None:
     assert df_normal["ohio_feat_rs_raw"].isna().all(), "ohio_feat_rs_raw must be all NaN"
 
 
-def test_cross_asset_placeholder_is_all_nan(df_normal: pd.DataFrame) -> None:
-    assert df_normal["ohio_feat_cross_asset_placeholder"].isna().all(), (
-        "ohio_feat_cross_asset_placeholder must be all NaN"
+def test_cross_asset_features_are_all_nan(df_normal: pd.DataFrame) -> None:
+    assert df_normal["ohio_feat_correlation_stress"].isna().all(), (
+        "ohio_feat_correlation_stress must be all NaN when cross-asset provider is absent"
+    )
+    assert df_normal["ohio_feat_breadth_dispersion"].isna().all(), (
+        "ohio_feat_breadth_dispersion must be all NaN when cross-asset provider is absent"
     )
 
 

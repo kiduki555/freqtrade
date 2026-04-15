@@ -86,17 +86,16 @@ class FactorCalculator:
             rs_raw.where(rs_raw.notna(), 0.5), 0.0, 1.0
         )
 
-        # --- correlation_stress [0, 1] — placeholder, defaults to 0.5 ---
-        # TODO(FT-019): Replace with actual cross-asset correlation feature
-        cross = _get_col(df, "ohio_norm_cross_asset_placeholder", default=np.nan)
+        # --- correlation_stress [0, 1] ---
+        corr = _get_col(df, "ohio_norm_correlation_stress", default=np.nan)
         df["ohio_factor_correlation"] = np.clip(
-            cross.where(cross.notna(), 0.5), 0.0, 1.0
+            corr.where(corr.notna(), 0.5), 0.0, 1.0
         )
 
-        # --- breadth_dispersion [0, 1] — placeholder, defaults to 0.5 ---
-        # TODO(FT-019): Replace with actual cross-asset breadth feature
+        # --- breadth_dispersion [0, 1] ---
+        breadth = _get_col(df, "ohio_norm_breadth_dispersion", default=np.nan)
         df["ohio_factor_breadth"] = np.clip(
-            cross.where(cross.notna(), 0.5), 0.0, 1.0
+            breadth.where(breadth.notna(), 0.5), 0.0, 1.0
         )
 
         return df

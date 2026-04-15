@@ -48,9 +48,10 @@ FEATURE_COLUMNS: list[str] = [
     "ohio_feat_bid_ask_approx",
     "ohio_feat_volume_ratio_24",
     "ohio_feat_obv_slope_24",
-    # Placeholders (2)
+    # Placeholders / cross-asset (3)
     "ohio_feat_rs_raw",
-    "ohio_feat_cross_asset_placeholder",
+    "ohio_feat_correlation_stress",
+    "ohio_feat_breadth_dispersion",
 ]
 
 
@@ -268,4 +269,8 @@ class FeatureBuilder:
 
     def _compute_placeholders(self, df: pd.DataFrame) -> None:
         df["ohio_feat_rs_raw"] = np.nan
-        df["ohio_feat_cross_asset_placeholder"] = np.nan
+        # Cross-asset features populated by thin_strategy via cross_asset_provider
+        if "ohio_feat_correlation_stress" not in df.columns:
+            df["ohio_feat_correlation_stress"] = np.nan
+        if "ohio_feat_breadth_dispersion" not in df.columns:
+            df["ohio_feat_breadth_dispersion"] = np.nan

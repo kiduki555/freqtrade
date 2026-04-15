@@ -16,7 +16,18 @@ from pandas import DataFrame
 from freqtrade.persistence import Order, Trade
 from freqtrade.strategy.interface import IStrategy
 
-from freqtrade.ohio.adapters.freqtrade.exit_adapter import compute_exit, compute_stoploss
+from freqtrade.ohio.adapters.freqtrade.cross_asset_provider import (
+    compute_breadth_dispersion,
+    compute_correlation_stress,
+    compute_peer_returns,
+    fetch_peer_closes,
+)
+from freqtrade.ohio.adapters.freqtrade.exit_adapter import (
+    ExitParams,
+    compute_exit,
+    compute_stoploss,
+)
+from freqtrade.strategy.parameters import DecimalParameter, IntParameter
 from freqtrade.ohio.adapters.freqtrade.metadata_handler import (
     get_trade_mode,
     save_entry_metadata,
@@ -42,7 +53,6 @@ from freqtrade.ohio.core.portfolio_risk.drawdown_controller import DrawdownContr
 from freqtrade.ohio.core.portfolio_risk.kill_switch import KillSwitch
 from freqtrade.ohio.core.strategy_router.fitness_estimator import FitnessEstimator
 from freqtrade.ohio.core.strategy_router.policy_generator import PolicyGenerator
-from freqtrade.ohio.config.defaults import OhioConfig
 from freqtrade.ohio.core.strategy_router.strategy_profile import load_default_profiles
 
 
@@ -77,6 +87,34 @@ class OhioThinStrategy(IStrategy):
     can_short = True
 
     # ------------------------------------------------------------------
+    # Hyperopt parameters
+    # ------------------------------------------------------------------
+
+    # Hedge algorithm
+    hedge_eta = DecimalParameter(0.01, 0.50, default=0.10, decimals=2, space="buy", optimize=True)
+    hedge_temperature = DecimalParameter(0.5, 5.0, default=2.0, decimals=1, space="buy", optimize=True)
+
+    # Policy
+    disabled_threshold = DecimalParameter(0.20, 0.60, default=0.40, decimals=2, space="buy", optimize=True)
+
+    # Exit — timing
+    time_exit_bars = IntParameter(6, 48, default=12, space="sell", optimize=True)
+    time_exit_fitness = DecimalParameter(0.05, 0.30, default=0.15, decimals=2, space="sell", optimize=True)
+
+    # Exit — regime
+    regime_exit_risk = DecimalParameter(0.60, 0.95, default=0.80, decimals=2, space="sell", optimize=True)
+
+    # Exit — profit preserve
+    profit_preserve_profit = DecimalParameter(0.01, 0.08, default=0.03, decimals=2, space="sell", optimize=True)
+    profit_preserve_fitness = DecimalParameter(0.15, 0.50, default=0.30, decimals=2, space="sell", optimize=True)
+
+    # Stoploss tuning
+    trailing_profit_threshold = DecimalParameter(0.005, 0.05, default=0.02, decimals=3, space="sell", optimize=True)
+    trailing_profit_ratio = DecimalParameter(0.30, 0.70, default=0.50, decimals=2, space="sell", optimize=True)
+    transition_tighten_factor = DecimalParameter(0.50, 0.90, default=0.70, decimals=2, space="sell", optimize=True)
+    sl_hard_floor = DecimalParameter(-0.30, -0.10, default=-0.20, decimals=2, space="sell", optimize=True)
+
+    # ------------------------------------------------------------------
     # __init__
     # ------------------------------------------------------------------
     def __init__(self, config: dict) -> None:
@@ -88,13 +126,13 @@ class OhioThinStrategy(IStrategy):
         self._factor_calculator = FactorCalculator()
         self._stabilizer = StateStabilizer()
         self._meta_calculator = MetaCalculator()
-        cfg = OhioConfig()
         self._fitness_estimator = FitnessEstimator(
-            hedge_eta=cfg.hedge_eta,
-            hedge_temperature=cfg.hedge_temperature,
-            hedge_weight_floor=cfg.hedge_weight_floor,
+            hedge_eta=self.hedge_eta.value,
+            hedge_temperature=self.hedge_temperature.value,
         )
-        self._policy_generator = PolicyGenerator()
+        self._policy_generator = PolicyGenerator(
+            disabled_threshold=self.disabled_threshold.value,
+        )
 
         # Risk / portfolio
         self._dd_controller = DrawdownController()
@@ -117,6 +155,35 @@ class OhioThinStrategy(IStrategy):
 
         # Phase 2: Feature extraction
         dataframe = self._feature_builder.compute(dataframe)
+
+        # Phase 2b: Cross-asset features (correlation_stress, breadth_dispersion)
+        try:
+            peer_closes = fetch_peer_closes(self.dp, metadata["pair"])
+            if len(peer_closes) >= 2:
+                peer_returns = compute_peer_returns(peer_closes)
+                dataframe["ohio_feat_correlation_stress"] = compute_correlation_stress(
+                    peer_returns
+                ).reindex(dataframe.index)
+                dataframe["ohio_feat_breadth_dispersion"] = compute_breadth_dispersion(
+                    peer_returns
+                ).reindex(dataframe.index)
+                logger.info(
+                    "ohio.cross_asset | pair=%s | peers=%d",
+                    metadata["pair"],
+                    len(peer_closes),
+                )
+            else:
+                logger.warning(
+                    "ohio.cross_asset | pair=%s | insufficient peers (%d), using NaN",
+                    metadata["pair"],
+                    len(peer_closes),
+                )
+        except Exception:
+            logger.warning(
+                "ohio.cross_asset | pair=%s | failed, using NaN fallback",
+                metadata["pair"],
+                exc_info=True,
+            )
 
         # Phase 3: Normalization + Factor calculation
         dataframe = self._normalizer.normalize(dataframe)
@@ -368,6 +435,7 @@ class OhioThinStrategy(IStrategy):
             profile, policy, current_profit, transition_risk, fitness,
             atr_scale=atr_scale,
             atr_ratio=atr_ratio,
+            params=self._exit_params(),
         )
 
     # ------------------------------------------------------------------
@@ -398,11 +466,26 @@ class OhioThinStrategy(IStrategy):
             fitness_score=fitness,
             transition_risk=transition_risk,
             is_kill_switch=self._kill_switch.active,
+            params=self._exit_params(),
         )
 
     # ==================================================================
     # Helper methods
     # ==================================================================
+
+    def _exit_params(self) -> ExitParams:
+        """Build ExitParams from current hyperopt parameter values."""
+        return ExitParams(
+            hard_floor=self.sl_hard_floor.value,
+            transition_tighten_factor=self.transition_tighten_factor.value,
+            trailing_profit_threshold=self.trailing_profit_threshold.value,
+            trailing_profit_ratio=self.trailing_profit_ratio.value,
+            time_exit_bars=self.time_exit_bars.value,
+            time_exit_fitness=self.time_exit_fitness.value,
+            regime_exit_risk=self.regime_exit_risk.value,
+            profit_preserve_profit=self.profit_preserve_profit.value,
+            profit_preserve_fitness=self.profit_preserve_fitness.value,
+        )
 
     def _build_policy_from_row(self, row) -> ExecutionPolicy:
         """Build ExecutionPolicy from DataFrame row's ohio_policy_* columns."""
