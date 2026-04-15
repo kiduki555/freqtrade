@@ -11,6 +11,7 @@ import pathlib
 import pytest
 
 from freqtrade.ohio.adapters.freqtrade.position_adapter import (
+    _calibrate_win_prob,
     compute_leverage,
     compute_stake,
     fractional_kelly,
@@ -113,11 +114,11 @@ class TestComputeStake:
             min_stake=10.0,
             max_stake=500.0,
         )
-        # kelly = fractional_kelly(0.9, 2.5, 0.25)
-        # kelly_full = 0.9 - 0.1/2.5 = 0.9 - 0.04 = 0.86
-        # kelly = 0.86 * 0.25 = 0.215
-        # stake = 1000 * 0.215 * 1.0 * 1.0 = 215.0
-        assert result == pytest.approx(215.0)
+        # calibrated_wp = 0.50 + 0.10*0.9 = 0.59
+        # kelly_full = 0.59 - 0.41/2.0 = 0.59 - 0.205 = 0.385
+        # kelly = 0.385 * 0.15 = 0.05775
+        # stake = 1000 * 0.05775 * 1.0 * 1.0 = 57.75
+        assert result == pytest.approx(57.75)
 
     def test_low_fitness_small_stake(self) -> None:
         result = compute_stake(
@@ -127,10 +128,11 @@ class TestComputeStake:
             min_stake=10.0,
             max_stake=500.0,
         )
-        # kelly_full = 0.45 - 0.55/2.5 = 0.45 - 0.22 = 0.23
-        # kelly = 0.23 * 0.25 = 0.0575
-        # stake = 1000 * 0.0575 * 1.0 * 1.0 = 57.5
-        assert result == pytest.approx(57.5)
+        # calibrated_wp = 0.50 + 0.10*0.45 = 0.545
+        # kelly_full = 0.545 - 0.455/2.0 = 0.545 - 0.2275 = 0.3175
+        # kelly = 0.3175 * 0.15 = 0.047625
+        # stake = 1000 * 0.047625 * 1.0 * 1.0 = 47.625
+        assert result == pytest.approx(47.625)
 
     def test_clamped_to_min_stake(self) -> None:
         result = compute_stake(
@@ -182,6 +184,32 @@ class TestComputeStake:
             dd_scale=0.0,
         )
         assert result == 10.0
+
+
+# ---------------------------------------------------------------------------
+# Calibration function
+# ---------------------------------------------------------------------------
+
+class TestCalibrateWinProb:
+    def test_range_boundaries(self) -> None:
+        """Calibrated win prob should be in [0.50, 0.60]."""
+        assert _calibrate_win_prob(0.0) == pytest.approx(0.50)
+        assert _calibrate_win_prob(1.0) == pytest.approx(0.60)
+        assert _calibrate_win_prob(0.5) == pytest.approx(0.55)
+
+    def test_stake_much_smaller_than_old_formula(self) -> None:
+        """New calibrated sizing should produce significantly smaller stakes."""
+        result = compute_stake(
+            _policy(enabled=True, size_multiplier=1.0),
+            fitness_score=0.72,  # typical MR fitness
+            base_stake=10000.0,
+            min_stake=10.0,
+            max_stake=5000.0,
+        )
+        # Old: kelly(0.72, 2.5, 0.25) = (0.72 - 0.28/2.5) * 0.25 = 0.152 → stake=1520
+        # New: kelly(0.572, 2.0, 0.15) = (0.572 - 0.428/2.0) * 0.15 = 0.054 → stake=540
+        assert result < 600, f"Stake should be much smaller with calibrated wp: {result}"
+        assert result > 400, f"Stake should still be meaningful: {result}"
 
 
 # ---------------------------------------------------------------------------

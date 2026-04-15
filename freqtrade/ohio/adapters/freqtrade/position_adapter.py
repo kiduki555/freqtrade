@@ -7,7 +7,6 @@ No Freqtrade framework imports — only ohio/core domain types.
 """
 from __future__ import annotations
 
-
 from freqtrade.ohio.core.domain.models import ExecutionPolicy
 from freqtrade.ohio.core.strategy_router.strategy_profile import StrategyProfile
 
@@ -44,6 +43,20 @@ def fractional_kelly(
 
 
 # ---------------------------------------------------------------------------
+# Internal: Fitness → Win Probability Calibration
+# ---------------------------------------------------------------------------
+
+def _calibrate_win_prob(fitness_score: float) -> float:
+    """Map fitness score to conservative win probability estimate.
+
+    Fitness measures state-profile alignment, not actual win probability.
+    This linear mapping produces a conservative estimate in [0.50, 0.60],
+    reflecting that even ideal market conditions provide only a modest edge.
+    """
+    return 0.50 + 0.10 * fitness_score
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -59,7 +72,7 @@ def compute_stake(
 
     Args:
         policy: Execution policy from the pipeline.
-        fitness_score: Best-strategy fitness [0, 1], used as win_prob proxy.
+        fitness_score: Best-strategy fitness [0, 1].
         base_stake: Baseline stake amount (e.g. account balance fraction).
         min_stake: Minimum allowed stake.
         max_stake: Maximum allowed stake.
@@ -71,7 +84,8 @@ def compute_stake(
     if not policy.enabled:
         return min_stake
 
-    kelly = fractional_kelly(fitness_score, risk_reward=2.5, fraction=0.25)
+    calibrated_wp = _calibrate_win_prob(fitness_score)
+    kelly = fractional_kelly(calibrated_wp, risk_reward=2.0, fraction=0.15)
     stake = base_stake * kelly * policy.size_multiplier * dd_scale
 
     return max(min_stake, min(stake, max_stake))
