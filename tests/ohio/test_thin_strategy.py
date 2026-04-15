@@ -52,7 +52,7 @@ def _make_strategy(**config_overrides) -> OhioThinStrategy:
         StateStabilizer=lambda: MagicMock(),
         MetaCalculator=lambda: MagicMock(),
         FitnessEstimator=lambda **kw: MagicMock(),
-        PolicyGenerator=lambda: MagicMock(),
+        PolicyGenerator=lambda **kw: MagicMock(),
         DrawdownController=lambda: MagicMock(),
         KillSwitch=lambda: MagicMock(),
         RiskGateAdapter=lambda dd, ks: MagicMock(),
@@ -94,7 +94,7 @@ def _ohio_dataframe(n: int = 3, **overrides) -> pd.DataFrame:
         "ohio_active_mode": ["trend_following"] * n,
         "ohio_policy_enabled": [True] * n,
         "ohio_policy_size_multiplier": [1.2] * n,
-        "ohio_policy_entry_threshold_adj": [0.05] * n,
+        "ohio_policy_entry_threshold_adj": [0.0] * n,
         "ohio_policy_max_positions": [3] * n,
         "ohio_policy_stoploss_width_adj": [-0.005] * n,
         "ohio_meta_transition_risk": [0.15] * n,
@@ -105,6 +105,8 @@ def _ohio_dataframe(n: int = 3, **overrides) -> pd.DataFrame:
         "ohio_fitness_mean_reversion": [0.45] * n,
         "ohio_fitness_breakout": [0.31] * n,
         "ohio_fitness_defensive": [0.55] * n,
+        # default trend: positive and above min_trend_confidence (0.10)
+        "ohio_stable_trend": [0.50] * n,
     }
     base.update(overrides)
     return pd.DataFrame(base)
@@ -116,8 +118,22 @@ def _ohio_dataframe(n: int = 3, **overrides) -> pd.DataFrame:
 
 @pytest.fixture()
 def strategy() -> OhioThinStrategy:
-    """Return OhioThinStrategy with mocked pipeline stages."""
-    return _make_strategy()
+    """Return OhioThinStrategy with mocked pipeline stages.
+
+    regime_cooldown_bars is set to 0 by default so existing entry-trend tests
+    are unaffected.  Cooldown-specific tests override this per-test.
+    """
+    s = _make_strategy()
+    # Mock DataProvider so cross-asset Phase 2b doesn't silently fail
+    mock_dp = MagicMock()
+    mock_dp.get_pair_dataframe.return_value = pd.DataFrame(
+        {"close": [100.0, 101.0, 102.0]}
+    )
+    s.dp = mock_dp
+    # Disable cooldown by default — prevents warmup bars from blocking entries
+    # in tests that don't explicitly test cooldown behaviour.
+    s.regime_cooldown_bars = MagicMock(value=0)
+    return s
 
 
 @pytest.fixture()
@@ -331,6 +347,116 @@ class TestPopulateEntryTrend:
         assert result["enter_long"].iloc[0] == 0
         assert result["enter_long"].iloc[1] == 1
         assert result["enter_long"].iloc[2] == 0
+
+    def test_filters_by_entry_threshold_adj(self, strategy):
+        """Entries should be blocked when fitness < threshold + entry_adj."""
+        df = _ohio_dataframe(
+            3,
+            ohio_policy_enabled=[True, True, True],
+            ohio_fitness_trend_following=[0.50, 0.42, 0.60],
+            ohio_policy_entry_threshold_adj=[0.05, 0.05, 0.05],
+        )
+        # disabled_threshold=0.40 + entry_adj=0.05 = 0.45
+        # Row 0: fitness=0.50 >= 0.45 → enter
+        # Row 1: fitness=0.42 < 0.45 → blocked
+        # Row 2: fitness=0.60 >= 0.45 → enter
+        result = strategy.populate_entry_trend(df, {"pair": "BTC/USDT"})
+        assert result["enter_long"].iloc[0] == 1
+        assert result["enter_long"].iloc[1] == 0  # blocked by fitness gate
+        assert result["enter_long"].iloc[2] == 1
+
+    def test_filters_by_min_trend_confidence(self, strategy):
+        """Entries should be blocked when |trend| < min_trend_confidence."""
+        df = _ohio_dataframe(
+            4,
+            ohio_policy_enabled=[True, True, True, True],
+            ohio_stable_trend=[0.05, 0.20, -0.03, -0.15],
+            ohio_fitness_trend_following=[0.80, 0.80, 0.80, 0.80],
+        )
+        # Row 0: |trend|=0.05 < 0.10 → blocked
+        # Row 1: |trend|=0.20 >= 0.10 → enter_long
+        # Row 2: |trend|=0.03 < 0.10 → blocked
+        # Row 3: |trend|=0.15 >= 0.10 → enter_short
+        result = strategy.populate_entry_trend(df, {"pair": "BTC/USDT"})
+        assert result["enter_long"].iloc[0] == 0   # too weak trend
+        assert result["enter_long"].iloc[1] == 1
+        assert result["enter_short"].iloc[2] == 0  # too weak trend
+        assert result["enter_short"].iloc[3] == 1
+
+    def test_no_entry_when_all_filters_fail(self, strategy):
+        """All three filters (enabled, fitness, trend) must pass."""
+        df = _ohio_dataframe(
+            1,
+            ohio_policy_enabled=[True],
+            ohio_stable_trend=[0.03],           # below min_trend_confidence
+            ohio_fitness_trend_following=[0.35], # below threshold
+        )
+        result = strategy.populate_entry_trend(df, {"pair": "BTC/USDT"})
+        assert result["enter_long"].iloc[0] == 0
+        assert result["enter_short"].iloc[0] == 0
+
+    # ------------------------------------------------------------------
+    # Regime maturity cooldown tests
+    # ------------------------------------------------------------------
+
+    def test_regime_cooldown_blocks_immediate_switch(self, strategy):
+        """Entries are blocked for N bars after a regime switch (default N=3)."""
+        strategy.regime_cooldown_bars = MagicMock(value=3)
+        df = _ohio_dataframe(
+            6,
+            ohio_active_mode=[
+                "mean_reversion", "mean_reversion",
+                "trend_following", "trend_following",
+                "trend_following", "trend_following",
+            ],
+            ohio_policy_enabled=[True] * 6,
+            ohio_stable_trend=[0.50] * 6,
+            ohio_fitness_trend_following=[0.80] * 6,
+            ohio_fitness_mean_reversion=[0.80] * 6,
+        )
+        # Regime switches at index 2 (MR → TF).
+        # regime_age at each row: 0,1, 0,1,2,3
+        # With cooldown=3: ages 0,1,2 are blocked; age 3 is allowed.
+        # Row 2: TF, age=0 → blocked
+        # Row 3: TF, age=1 → blocked
+        # Row 4: TF, age=2 → blocked
+        # Row 5: TF, age=3 → allowed
+        result = strategy.populate_entry_trend(df, {"pair": "BTC/USDT"})
+        assert result["enter_long"].iloc[2] == 0, "age=0 after switch → blocked"
+        assert result["enter_long"].iloc[3] == 0, "age=1 → blocked"
+        assert result["enter_long"].iloc[4] == 0, "age=2 → blocked"
+        assert result["enter_long"].iloc[5] == 1, "age=3 → cooldown passed"
+
+    def test_regime_cooldown_zero_disables(self, strategy):
+        """With cooldown=0, entries are never blocked by the cooldown gate."""
+        strategy.regime_cooldown_bars = MagicMock(value=0)
+        df = _ohio_dataframe(
+            3,
+            ohio_active_mode=["mean_reversion", "trend_following", "trend_following"],
+            ohio_policy_enabled=[True] * 3,
+            ohio_stable_trend=[0.50] * 3,
+            ohio_fitness_trend_following=[0.80] * 3,
+            ohio_fitness_mean_reversion=[0.80] * 3,
+        )
+        result = strategy.populate_entry_trend(df, {"pair": "BTC/USDT"})
+        # Row 1: regime just changed, but cooldown=0 → allowed
+        assert result["enter_long"].iloc[1] == 1
+
+    def test_no_switch_means_no_cooldown_effect(self, strategy):
+        """When regime is constant, only the initial warmup bars are blocked."""
+        strategy.regime_cooldown_bars = MagicMock(value=3)
+        df = _ohio_dataframe(
+            4,
+            ohio_active_mode=["trend_following"] * 4,
+            ohio_policy_enabled=[True] * 4,
+            ohio_stable_trend=[0.50] * 4,
+            ohio_fitness_trend_following=[0.80] * 4,
+        )
+        # First bar: shift(1) is NaN → treated as change → age=0.
+        # regime_age sequence: 0, 1, 2, 3
+        # With cooldown=3: rows 0-2 blocked, row 3 allowed.
+        result = strategy.populate_entry_trend(df, {"pair": "BTC/USDT"})
+        assert result["enter_long"].iloc[3] == 1, "age=3 → warmup complete"
 
 
 # ---------------------------------------------------------------------------

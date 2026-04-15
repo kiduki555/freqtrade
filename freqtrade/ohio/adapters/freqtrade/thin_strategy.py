@@ -11,6 +11,9 @@ import logging
 import math
 from datetime import datetime, timezone
 
+import numpy as np
+
+import pandas as pd
 from pandas import DataFrame
 
 from freqtrade.persistence import Order, Trade
@@ -91,22 +94,28 @@ class OhioThinStrategy(IStrategy):
     # ------------------------------------------------------------------
 
     # Hedge algorithm
-    hedge_eta = DecimalParameter(0.01, 0.50, default=0.10, decimals=2, space="buy", optimize=True)
-    hedge_temperature = DecimalParameter(0.5, 5.0, default=2.0, decimals=1, space="buy", optimize=True)
+    hedge_eta = DecimalParameter(0.01, 0.50, default=0.25, decimals=2, space="buy", optimize=True)
+    hedge_temperature = DecimalParameter(0.5, 5.0, default=1.0, decimals=1, space="buy", optimize=True)
 
     # Policy
     disabled_threshold = DecimalParameter(0.20, 0.60, default=0.40, decimals=2, space="buy", optimize=True)
+    min_trend_confidence = DecimalParameter(0.05, 0.25, default=0.10, decimals=2, space="buy", optimize=True)  # noqa: E501
+
+    # Regime maturity cooldown — bars to wait after a regime switch before entering.
+    # Addresses detection lag (Ang & Timmermann 2012): switching immediately catches
+    # the tail of the old regime.  0 disables the gate.
+    regime_cooldown_bars = IntParameter(0, 10, default=3, space="buy", optimize=True)
 
     # Exit — timing
     time_exit_bars = IntParameter(6, 48, default=12, space="sell", optimize=True)
-    time_exit_fitness = DecimalParameter(0.05, 0.30, default=0.15, decimals=2, space="sell", optimize=True)
+    time_exit_fitness = DecimalParameter(0.20, 0.55, default=0.40, decimals=2, space="sell", optimize=True)
 
     # Exit — regime
-    regime_exit_risk = DecimalParameter(0.60, 0.95, default=0.80, decimals=2, space="sell", optimize=True)
+    regime_exit_risk = DecimalParameter(0.50, 0.80, default=0.65, decimals=2, space="sell", optimize=True)
 
     # Exit — profit preserve
     profit_preserve_profit = DecimalParameter(0.01, 0.08, default=0.03, decimals=2, space="sell", optimize=True)
-    profit_preserve_fitness = DecimalParameter(0.15, 0.50, default=0.30, decimals=2, space="sell", optimize=True)
+    profit_preserve_fitness = DecimalParameter(0.30, 0.60, default=0.50, decimals=2, space="sell", optimize=True)
 
     # Stoploss tuning
     trailing_profit_threshold = DecimalParameter(0.005, 0.05, default=0.02, decimals=3, space="sell", optimize=True)
@@ -161,12 +170,22 @@ class OhioThinStrategy(IStrategy):
             peer_closes = fetch_peer_closes(self.dp, metadata["pair"])
             if len(peer_closes) >= 2:
                 peer_returns = compute_peer_returns(peer_closes)
-                dataframe["ohio_feat_correlation_stress"] = compute_correlation_stress(
-                    peer_returns
-                ).reindex(dataframe.index)
-                dataframe["ohio_feat_breadth_dispersion"] = compute_breadth_dispersion(
-                    peer_returns
-                ).reindex(dataframe.index)
+                corr_series = compute_correlation_stress(peer_returns)
+                breadth_series = compute_breadth_dispersion(peer_returns)
+                # Align by position — peer and strategy df share candle timeline
+                if len(corr_series) >= len(dataframe):
+                    dataframe["ohio_feat_correlation_stress"] = corr_series.values[:len(dataframe)]
+                    dataframe["ohio_feat_breadth_dispersion"] = (
+                        breadth_series.values[:len(dataframe)]
+                    )
+                else:
+                    pad = len(dataframe) - len(corr_series)
+                    dataframe["ohio_feat_correlation_stress"] = np.concatenate(
+                        [np.full(pad, np.nan), corr_series.values]
+                    )
+                    dataframe["ohio_feat_breadth_dispersion"] = np.concatenate(
+                        [np.full(pad, np.nan), breadth_series.values]
+                    )
                 logger.info(
                     "ohio.cross_asset | pair=%s | peers=%d",
                     metadata["pair"],
@@ -212,9 +231,49 @@ class OhioThinStrategy(IStrategy):
         # Entry condition: policy enabled
         enabled = dataframe["ohio_policy_enabled"] == True  # noqa: E712
         active = dataframe["ohio_active_mode"]
-        trend = dataframe.get("ohio_stable_trend", 0.0)
+        trend = dataframe.get("ohio_stable_trend", pd.Series(0.0, index=dataframe.index))
 
-        entry_mask = enabled.fillna(False)
+        # Fitness gate: active mode fitness must exceed disabled_threshold + entry_adj
+        threshold = self.disabled_threshold.value
+        entry_adj = dataframe.get(
+            "ohio_policy_entry_threshold_adj",
+            pd.Series(0.0, index=dataframe.index),
+        )
+        # Vectorized fitness lookup — avoid slow .apply(lambda)
+        fitness = pd.Series(np.nan, index=dataframe.index)
+        for mode in ["trend_following", "mean_reversion", "breakout", "defensive"]:
+            mask = active == mode
+            col = f"ohio_fitness_{mode}"
+            if col in dataframe.columns:
+                fitness = fitness.where(~mask, dataframe[col])
+        # NaN fitness (unknown/missing mode) → 0.0 → blocked by gate
+        unmatched = fitness.isna().sum()
+        if unmatched > 0:
+            logger.warning(
+                "ohio.entry_filter | %d rows with unmatched active_mode → fitness=0",
+                unmatched,
+            )
+        fitness_gate = fitness.fillna(0.0) >= (threshold + entry_adj)
+
+        # Minimum directional confidence gate: |trend| >= min_trend_confidence
+        min_conf = self.min_trend_confidence.value
+        direction_gate = trend.abs() >= min_conf
+
+        entry_mask = enabled.fillna(False) & fitness_gate & direction_gate
+
+        # Regime maturity cooldown gate.
+        # After a regime switch the detector lags reality by several bars
+        # (Ang & Timmermann 2012).  Block entries until the current regime has
+        # been active for at least `regime_cooldown_bars` consecutive bars.
+        cooldown = self.regime_cooldown_bars.value
+        if cooldown > 0:
+            mode_changed = active != active.shift(1)
+            # cumsum() creates a group-id that increments on every switch.
+            # cumcount() within each group gives the 0-based age in that regime.
+            regime_group = mode_changed.cumsum()
+            regime_age = regime_group.groupby(regime_group).cumcount()
+            entry_mask = entry_mask & (regime_age >= cooldown)
+
         long_mask = entry_mask & (trend >= 0)
         short_mask = entry_mask & (trend < 0)
 
@@ -460,12 +519,14 @@ class OhioThinStrategy(IStrategy):
         fitness = self._get_best_fitness(last)
         transition_risk = float(last.get("ohio_meta_transition_risk", 0.0))
 
+        active_mode = str(last.get("ohio_active_mode", "defensive"))
         return compute_exit(
             bars_since_entry=bars_since,
             current_profit=current_profit,
             fitness_score=fitness,
             transition_risk=transition_risk,
             is_kill_switch=self._kill_switch.active,
+            active_mode=active_mode,
             params=self._exit_params(),
         )
 

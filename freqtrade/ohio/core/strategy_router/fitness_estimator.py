@@ -182,8 +182,8 @@ class FitnessEstimator:
     def __init__(
         self,
         profiles: dict[StrategyMode, StrategyProfile] | None = None,
-        hedge_eta: float = 0.1,
-        hedge_temperature: float = 2.0,
+        hedge_eta: float = 0.25,
+        hedge_temperature: float = 1.0,
         hedge_weight_floor: float = 0.05,
     ) -> None:
         """Initialise the estimator.

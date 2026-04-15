@@ -210,8 +210,19 @@ class TestComputeExitRegime:
     def test_triggers_at_085(self):
         assert compute_exit(5, 0.0, 0.50, 0.85, False) == "ohio_regime_exit"
 
-    def test_no_trigger_at_075(self):
-        assert compute_exit(5, 0.0, 0.50, 0.75, False) is None
+    def test_triggers_at_070_new_default(self):
+        # regime_exit_risk default is now 0.65 — 0.70 > 0.65 should trigger
+        assert compute_exit(5, 0.0, 0.50, 0.70, False) == "ohio_regime_exit"
+
+    def test_no_trigger_at_060(self):
+        # 0.60 < 0.65 (new default) → no trigger
+        assert compute_exit(5, 0.0, 0.50, 0.60, False) is None
+
+    def test_no_trigger_at_075_with_old_threshold(self):
+        # Explicit params with old threshold: 0.75 < 0.80 → no trigger
+        from freqtrade.ohio.adapters.freqtrade.exit_adapter import ExitParams
+        params = ExitParams(regime_exit_risk=0.80)
+        assert compute_exit(5, 0.0, 0.50, 0.75, False, params=params) is None
 
 
 class TestComputeExitProfitPreserve:
@@ -426,6 +437,89 @@ class TestAtrBaselineNan:
             fitness_score=0.5, atr_scale=1.0,
         )
         assert no_scale == pytest.approx(explicit_1, abs=1e-9)
+
+
+class TestComputeExitRegimeConditional:
+    """Regime-conditional time exit bars."""
+
+    def test_mean_reversion_shorter_hold(self):
+        """MR mode should use half the time_exit_bars (max 6)."""
+        from freqtrade.ohio.adapters.freqtrade.exit_adapter import ExitParams
+        params = ExitParams(time_exit_bars=12, time_exit_fitness=0.40)
+        # MR effective = max(6, 12//2) = 6 → bars=7 >= 6 and fitness=0.30 < 0.40
+        result = compute_exit(
+            bars_since_entry=7, current_profit=0.0,
+            fitness_score=0.30, transition_risk=0.0,
+            is_kill_switch=False, active_mode="mean_reversion", params=params,
+        )
+        assert result == "ohio_time_exit"
+
+    def test_mean_reversion_not_triggered_before_effective(self):
+        """MR effective_bars=6, bars=5 → not triggered."""
+        from freqtrade.ohio.adapters.freqtrade.exit_adapter import ExitParams
+        params = ExitParams(time_exit_bars=12, time_exit_fitness=0.40)
+        result = compute_exit(
+            bars_since_entry=5, current_profit=0.0,
+            fitness_score=0.30, transition_risk=0.0,
+            is_kill_switch=False, active_mode="mean_reversion", params=params,
+        )
+        assert result is None
+
+    def test_trend_following_longer_hold(self):
+        """TF mode should use 2.5x time_exit_bars."""
+        from freqtrade.ohio.adapters.freqtrade.exit_adapter import ExitParams
+        params = ExitParams(time_exit_bars=12, time_exit_fitness=0.40)
+        # TF effective = int(12 * 2.5) = 30 → bars=31 >= 30 and fitness=0.30 < 0.40
+        result = compute_exit(
+            bars_since_entry=31, current_profit=0.0,
+            fitness_score=0.30, transition_risk=0.0,
+            is_kill_switch=False, active_mode="trend_following", params=params,
+        )
+        assert result == "ohio_time_exit"
+
+    def test_trend_following_not_triggered_before_effective(self):
+        """TF effective_bars=30, bars=20 → not triggered."""
+        from freqtrade.ohio.adapters.freqtrade.exit_adapter import ExitParams
+        params = ExitParams(time_exit_bars=12, time_exit_fitness=0.40)
+        result = compute_exit(
+            bars_since_entry=20, current_profit=0.0,
+            fitness_score=0.30, transition_risk=0.0,
+            is_kill_switch=False, active_mode="trend_following", params=params,
+        )
+        assert result is None
+
+    def test_default_mode_uses_base_bars(self):
+        """Unknown or None mode uses base time_exit_bars."""
+        from freqtrade.ohio.adapters.freqtrade.exit_adapter import ExitParams
+        params = ExitParams(time_exit_bars=12, time_exit_fitness=0.40)
+        result = compute_exit(
+            bars_since_entry=13, current_profit=0.0,
+            fitness_score=0.30, transition_risk=0.0,
+            is_kill_switch=False, active_mode=None, params=params,
+        )
+        assert result == "ohio_time_exit"
+
+    def test_defensive_mode_uses_base_bars(self):
+        """Defensive mode (not MR or TF) uses base time_exit_bars."""
+        from freqtrade.ohio.adapters.freqtrade.exit_adapter import ExitParams
+        params = ExitParams(time_exit_bars=12, time_exit_fitness=0.40)
+        result = compute_exit(
+            bars_since_entry=13, current_profit=0.0,
+            fitness_score=0.30, transition_risk=0.0,
+            is_kill_switch=False, active_mode="defensive", params=params,
+        )
+        assert result == "ohio_time_exit"
+
+    def test_mean_reversion_high_fitness_no_exit(self):
+        """MR mode: effective_bars reached but fitness above threshold → no exit."""
+        from freqtrade.ohio.adapters.freqtrade.exit_adapter import ExitParams
+        params = ExitParams(time_exit_bars=12, time_exit_fitness=0.40)
+        result = compute_exit(
+            bars_since_entry=7, current_profit=0.0,
+            fitness_score=0.55, transition_risk=0.0,
+            is_kill_switch=False, active_mode="mean_reversion", params=params,
+        )
+        assert result is None
 
 
 class TestNoFreqtradeImports:
