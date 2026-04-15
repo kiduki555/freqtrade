@@ -518,3 +518,34 @@ def test_no_freqtrade_imports() -> None:
         elif isinstance(node, ast.ImportFrom):
             if node.module and node.module.startswith("freqtrade"):
                 raise AssertionError(f"Forbidden import: from {node.module}")
+
+
+# ---------------------------------------------------------------------------
+# Test 20: Default params produce meaningful variance (not over-smoothed)
+# ---------------------------------------------------------------------------
+
+
+def test_default_params_produce_variance() -> None:
+    """Default stabilizer params should preserve meaningful variance in output."""
+    n = 500
+    rng = np.random.default_rng(99)
+    # Simulate realistic factor data: slow-moving with occasional regime changes
+    base = np.cumsum(rng.normal(0, 0.02, n))
+    # Normalize to [0, 1] range (like percentile rank output)
+    factors = (base - base.min()) / (base.max() - base.min())
+
+    df = pd.DataFrame({col: factors.copy() for col in _FACTOR_COLS})
+    stab = StateStabilizer()  # uses new defaults
+    result = stab.stabilize(df)
+
+    stable = result[_STABLE_COLS[0]].dropna().to_numpy()
+    # With new params, stable output should have meaningful variance
+    # (not all clustered at initial value)
+    n_unique = len(np.unique(np.round(stable, 4)))
+    assert n_unique > 5, (
+        f"Stabilizer output has too few unique values ({n_unique}) — over-smoothed"
+    )
+    output_range = stable.max() - stable.min()
+    assert output_range > 0.1, (
+        f"Stabilizer output range too narrow: {output_range:.4f}"
+    )
