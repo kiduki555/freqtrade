@@ -94,59 +94,58 @@ class OhioThinStrategy(IStrategy):
     # Hyperopt parameters
     # ------------------------------------------------------------------
 
-    # Hedge algorithm
-    hedge_eta = DecimalParameter(0.01, 0.50, default=0.25, decimals=2, space="buy", optimize=True)
-    hedge_temperature = DecimalParameter(0.5, 5.0, default=1.0, decimals=1, space="buy", optimize=True)
+    # Hedge algorithm — Stage 1 optimized, LOCKED
+    hedge_eta = DecimalParameter(0.01, 0.50, default=0.40, decimals=2, space="buy", optimize=False)
+    hedge_temperature = DecimalParameter(0.5, 5.0, default=3.6, decimals=1, space="buy", optimize=False)
 
-    # Policy
-    disabled_threshold = DecimalParameter(0.20, 0.60, default=0.40, decimals=2, space="buy", optimize=True)
-    min_trend_confidence = DecimalParameter(0.05, 0.25, default=0.10, decimals=2, space="buy", optimize=True)  # noqa: E501
+    # Policy — Stage 1 optimized, LOCKED
+    disabled_threshold = DecimalParameter(0.20, 0.60, default=0.34, decimals=2, space="buy", optimize=False)
+    min_trend_confidence = DecimalParameter(0.05, 0.25, default=0.05, decimals=2, space="buy", optimize=False)  # noqa: E501
 
-    # Regime maturity cooldown — bars to wait after a regime switch before entering.
-    # Addresses detection lag (Ang & Timmermann 2012): switching immediately catches
-    # the tail of the old regime.  0 disables the gate.
-    regime_cooldown_bars = IntParameter(0, 10, default=3, space="buy", optimize=True)
+    # Regime maturity cooldown — Stage 1 optimized, LOCKED
+    regime_cooldown_bars = IntParameter(0, 10, default=10, space="buy", optimize=False)
 
     # --- Mode-specific entry parameters (buy space) ---
+    # >>> ALL STAGES COMPLETE — Final optimized values <<<
 
-    # Trend Following (TSMOM + KAMA + ADX + Hurst)
-    tf_adx_threshold = DecimalParameter(15.0, 40.0, default=25.0, decimals=1, space="buy", optimize=True)
-    tf_hurst_threshold = DecimalParameter(0.45, 0.70, default=0.55, decimals=2, space="buy", optimize=True)
-    tf_kama_slope_threshold = DecimalParameter(0.0001, 0.005, default=0.001, decimals=4, space="buy", optimize=True)
-    tf_vol_scale_target = DecimalParameter(0.5, 2.0, default=1.0, decimals=1, space="buy", optimize=True)
+    # Trend Following — Stage 2a LOCKED (Sharpe -0.46, 300 epochs)
+    tf_adx_threshold = DecimalParameter(15.0, 40.0, default=36.4, decimals=1, space="buy", optimize=False)
+    tf_hurst_threshold = DecimalParameter(0.45, 0.70, default=0.70, decimals=2, space="buy", optimize=False)
+    tf_kama_slope_threshold = DecimalParameter(0.0001, 0.005, default=0.005, decimals=4, space="buy", optimize=False)
+    tf_vol_scale_target = DecimalParameter(0.5, 2.0, default=0.6, decimals=1, space="buy", optimize=False)
 
-    # Mean Reversion (Z-score + Hurst gate + BB + RSI)
-    mr_zscore_entry = DecimalParameter(1.5, 3.0, default=2.0, decimals=1, space="buy", optimize=True)
-    mr_rsi_oversold = IntParameter(20, 40, default=30, space="buy", optimize=True)
-    mr_rsi_overbought = IntParameter(60, 80, default=70, space="buy", optimize=True)
-    mr_hurst_max = DecimalParameter(0.35, 0.55, default=0.45, decimals=2, space="buy", optimize=True)
+    # Mean Reversion — Stage 2b LOCKED (Sharpe -0.22, 300 epochs)
+    mr_zscore_entry = DecimalParameter(1.5, 3.0, default=2.7, decimals=1, space="buy", optimize=False)
+    mr_rsi_oversold = IntParameter(20, 40, default=29, space="buy", optimize=False)
+    mr_rsi_overbought = IntParameter(60, 80, default=60, space="buy", optimize=False)
+    mr_hurst_max = DecimalParameter(0.35, 0.55, default=0.46, decimals=2, space="buy", optimize=False)
 
-    # Breakout (Bollinger Squeeze + Donchian + Volume)
-    bo_squeeze_min_bars = IntParameter(3, 10, default=6, space="buy", optimize=True)
-    bo_volume_mult = DecimalParameter(1.2, 2.5, default=1.5, decimals=1, space="buy", optimize=True)
-    bo_donchian_window = IntParameter(10, 30, default=20, space="buy", optimize=True)
+    # Breakout — Stage 3a LOCKED (Sharpe -0.22, 200 epochs)
+    bo_squeeze_min_bars = IntParameter(3, 10, default=5, space="buy", optimize=False)
+    bo_volume_mult = DecimalParameter(1.2, 2.5, default=1.6, decimals=1, space="buy", optimize=False)
+    bo_donchian_window = IntParameter(10, 30, default=13, space="buy", optimize=False)
 
-    # Defensive (vol-targeting + low-ADX gate)
-    def_adx_max = DecimalParameter(15.0, 30.0, default=20.0, decimals=1, space="buy", optimize=True)
-    def_vol_scale = DecimalParameter(0.05, 0.30, default=0.15, decimals=2, space="buy", optimize=True)
-    def_min_trend_abs = DecimalParameter(0.01, 0.10, default=0.03, decimals=2, space="buy", optimize=True)
+    # Defensive — Stage 3b LOCKED (Sharpe +0.38, 200 epochs)
+    def_adx_max = DecimalParameter(15.0, 30.0, default=17.9, decimals=1, space="buy", optimize=False)
+    def_vol_scale = DecimalParameter(0.05, 0.30, default=0.18, decimals=2, space="buy", optimize=False)
+    def_min_trend_abs = DecimalParameter(0.01, 0.10, default=0.01, decimals=2, space="buy", optimize=False)
 
-    # Exit — timing
-    time_exit_bars = IntParameter(6, 48, default=12, space="sell", optimize=True)
-    time_exit_fitness = DecimalParameter(0.20, 0.55, default=0.40, decimals=2, space="sell", optimize=True)
+    # Exit timing — Stage 4a LOCKED (Sharpe +1.43, 400 epochs)
+    time_exit_bars = IntParameter(6, 48, default=31, space="sell", optimize=False)
+    time_exit_fitness = DecimalParameter(0.20, 0.55, default=0.47, decimals=2, space="sell", optimize=False)
 
-    # Exit — regime
-    regime_exit_risk = DecimalParameter(0.50, 0.80, default=0.65, decimals=2, space="sell", optimize=True)
+    # Exit — regime — Stage 4a LOCKED
+    regime_exit_risk = DecimalParameter(0.50, 0.80, default=0.69, decimals=2, space="sell", optimize=False)
 
-    # Exit — profit preserve
-    profit_preserve_profit = DecimalParameter(0.01, 0.08, default=0.03, decimals=2, space="sell", optimize=True)
-    profit_preserve_fitness = DecimalParameter(0.30, 0.60, default=0.50, decimals=2, space="sell", optimize=True)
+    # Exit — profit preserve — Stage 4a LOCKED
+    profit_preserve_profit = DecimalParameter(0.01, 0.08, default=0.01, decimals=2, space="sell", optimize=False)
+    profit_preserve_fitness = DecimalParameter(0.30, 0.60, default=0.58, decimals=2, space="sell", optimize=False)
 
-    # Stoploss tuning
-    trailing_profit_threshold = DecimalParameter(0.005, 0.05, default=0.02, decimals=3, space="sell", optimize=True)
-    trailing_profit_ratio = DecimalParameter(0.30, 0.70, default=0.50, decimals=2, space="sell", optimize=True)
-    transition_tighten_factor = DecimalParameter(0.50, 0.90, default=0.70, decimals=2, space="sell", optimize=True)
-    sl_hard_floor = DecimalParameter(-0.30, -0.10, default=-0.20, decimals=2, space="sell", optimize=True)
+    # Stoploss — Stage 4b LOCKED (Sharpe +1.47, 300 epochs)
+    trailing_profit_threshold = DecimalParameter(0.005, 0.05, default=0.048, decimals=3, space="sell", optimize=False)
+    trailing_profit_ratio = DecimalParameter(0.30, 0.70, default=0.52, decimals=2, space="sell", optimize=False)
+    transition_tighten_factor = DecimalParameter(0.50, 0.90, default=0.76, decimals=2, space="sell", optimize=False)
+    sl_hard_floor = DecimalParameter(-0.30, -0.10, default=-0.13, decimals=2, space="sell", optimize=False)
 
     # ------------------------------------------------------------------
     # __init__
