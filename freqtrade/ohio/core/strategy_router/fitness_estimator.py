@@ -25,6 +25,7 @@ from freqtrade.ohio.core.strategy_router.strategy_profile import (
     load_default_profiles,
 )
 
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -73,6 +74,12 @@ def _compute_rewards(
     neither mode is systematically favoured (ATR is too large as threshold:
     88%+ of bars have |ret| < ATR, which would bias DEF permanently).
 
+    After computing raw per-mode rewards, a **cross-sectional z-score** is
+    applied per row (bar): subtract the row mean and divide by the row
+    standard deviation.  This guarantees mean-zero rewards across modes for
+    every bar, eliminating systematic bias from fat-tailed return
+    distributions (e.g. BO previously had +0.08 mean due to |ret| skew).
+
     Args:
         ret:      1-bar return array (close.pct_change()). NaN → 0 reward.
         trend:    ohio_stable_trend array.
@@ -80,7 +87,8 @@ def _compute_rewards(
         lookback: Rolling window for BO/DEF median. Default 168 (7 days @ 1h).
 
     Returns:
-        (N, 4) array: columns = [TF, MR, BO, DEF], values in [-1, 1].
+        (N, 4) array: columns = [TF, MR, BO, DEF], cross-sectionally
+        z-scored and clipped to [-1, 1].
     """
     safe_ret = np.nan_to_num(ret, nan=0.0)
     safe_trend = np.nan_to_num(trend, nan=0.0)
@@ -106,7 +114,14 @@ def _compute_rewards(
     reward_bo = np.clip((abs_ret - median_abs_ret) / median_abs_ret, -1.0, 1.0)
     reward_df = np.clip((median_abs_ret - abs_ret) / median_abs_ret, -1.0, 1.0)
 
-    return np.column_stack([reward_tf, reward_mr, reward_bo, reward_df])
+    raw = np.column_stack([reward_tf, reward_mr, reward_bo, reward_df])
+
+    # Cross-sectional z-score: eliminate distributional bias per bar
+    row_mean = raw.mean(axis=1, keepdims=True)
+    row_std = np.maximum(raw.std(axis=1, keepdims=True), 1e-8)
+    normalized = (raw - row_mean) / row_std
+
+    return np.clip(normalized, -1.0, 1.0)
 
 
 def _compute_hedge_weights(

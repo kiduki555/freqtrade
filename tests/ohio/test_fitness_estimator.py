@@ -612,3 +612,70 @@ def test_compute_dataframe_empty_dataframe(estimator: FitnessEstimator) -> None:
     }
     for col in expected_cols:
         assert col in df_out.columns, f"Missing column in empty result: {col}"
+
+
+# ---------------------------------------------------------------------------
+# 22. Cross-sectional z-score: row means ≈ 0
+# ---------------------------------------------------------------------------
+
+
+def test_compute_rewards_mean_zero_per_bar() -> None:
+    """Cross-sectional normalization should make row means approximately zero."""
+    from freqtrade.ohio.core.strategy_router.fitness_estimator import _compute_rewards
+
+    rng = np.random.default_rng(42)
+    n = 1000
+    ret = rng.normal(0, 0.01, n)
+    trend = rng.uniform(-1, 1, n)
+    atr = np.full(n, 0.01)
+    rewards = _compute_rewards(ret, trend, atr)
+    # Each row should have mean ≈ 0 (z-scored)
+    row_means = rewards.mean(axis=1)
+    assert np.abs(row_means).max() < 0.01, (
+        f"Row means not zero: max={np.abs(row_means).max()}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 23. No systematic mode bias after z-score normalization
+# ---------------------------------------------------------------------------
+
+
+def test_compute_rewards_no_systematic_mode_bias() -> None:
+    """No single mode should have a systematically positive mean reward."""
+    from freqtrade.ohio.core.strategy_router.fitness_estimator import _compute_rewards
+
+    rng = np.random.default_rng(42)
+    n = 5000
+    # Fat-tailed returns (Student-t with df=3, similar to crypto)
+    ret = rng.standard_t(df=3, size=n) * 0.01
+    trend = rng.uniform(-0.5, 0.5, n)
+    atr = np.full(n, 0.01)
+    rewards = _compute_rewards(ret, trend, atr)
+    col_means = rewards.mean(axis=0)
+    # All column means should be near zero (< 0.05 in absolute value)
+    for i, name in enumerate(["TF", "MR", "BO", "DEF"]):
+        assert abs(col_means[i]) < 0.05, (
+            f"Mode {name} has systematic bias: mean={col_means[i]:.4f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 24. Z-scoring preserves relative ordering within each bar
+# ---------------------------------------------------------------------------
+
+
+def test_compute_rewards_preserves_relative_ordering() -> None:
+    """Z-scoring should preserve which mode has highest reward per bar."""
+    from freqtrade.ohio.core.strategy_router.fitness_estimator import _compute_rewards
+
+    n = 100
+    # When trend is strongly positive, TF should still rank higher than MR
+    ret = np.full(n, 0.02)  # positive return
+    trend = np.full(n, 0.8)  # strong uptrend
+    atr = np.full(n, 0.01)
+    rewards = _compute_rewards(ret, trend, atr)
+    # TF (col 0) should have higher reward than MR (col 1) for positive ret + positive trend
+    assert (rewards[:, 0] > rewards[:, 1]).all(), (
+        "TF should beat MR in uptrend with positive returns"
+    )
