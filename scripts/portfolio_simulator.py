@@ -19,11 +19,11 @@ STRATEGIES = {
         "max_dd": 2.31,
         "trades": 236,
     },
-    "OhioMomentum4H": {
-        "profit_pct": 36.23,
-        "sharpe": 1.09,
-        "max_dd": 10.50,
-        "trades": 1675,
+    "OhioMomentum4H": {  # Hyperopt-optimized
+        "profit_pct": 43.98,
+        "sharpe": 1.65,
+        "max_dd": 10.22,
+        "trades": 994,
     },
 }
 
