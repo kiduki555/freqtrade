@@ -108,9 +108,9 @@ class StateStabilizer:
 
     def __init__(
         self,
-        ema_alpha: float = 0.20,
-        jump_threshold: float = 0.08,
-        min_dwell: int = 3,
+        ema_alpha: float = 0.30,
+        jump_threshold: float = 0.05,
+        min_dwell: int = 12,
     ) -> None:
         self.ema_alpha = ema_alpha
         self.jump_threshold = jump_threshold
@@ -195,9 +195,9 @@ class StreamingStateStabilizer:
 
     def __init__(
         self,
-        ema_alpha: float = 0.20,
-        jump_threshold: float = 0.08,
-        min_dwell: int = 3,
+        ema_alpha: float = 0.30,
+        jump_threshold: float = 0.05,
+        min_dwell: int = 12,
     ) -> None:
         self.ema_alpha = ema_alpha
         self.jump_threshold = jump_threshold

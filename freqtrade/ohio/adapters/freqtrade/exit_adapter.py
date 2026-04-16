@@ -103,7 +103,9 @@ def compute_stoploss(
         adjusted *= (1.0 / clamped_scale)
 
     # Regime-transition tightening (graduated: fires before entry block at 0.85)
-    if transition_risk > _TRANSITION_TIGHTEN_THRESHOLD:
+    # Only tighten on transition risk if the trade is not in significant profit.
+    # Otherwise the tightening triggers premature stop-outs on volatile profitable trades.
+    if transition_risk > _TRANSITION_TIGHTEN_THRESHOLD and current_profit < 0.02:
         adjusted *= p.transition_tighten_factor  # closer to zero = tighter
 
     # --- Trailing: Chandelier or profit lock ---
@@ -117,7 +119,9 @@ def compute_stoploss(
     elif current_profit > p.trailing_profit_threshold:
         adjusted = max(adjusted, -(current_profit * p.trailing_profit_ratio))
 
-    return _clamp(adjusted, p.hard_floor, _TIGHTEST)
+    # Use mode-specific hard floor if available from profile, else global
+    mode_floor = getattr(profile, "hard_floor", p.hard_floor)
+    return _clamp(adjusted, mode_floor, _TIGHTEST)
 
 
 def compute_exit(
@@ -161,7 +165,9 @@ def compute_exit(
     if bars_since_entry >= effective_bars and fitness_score < p.time_exit_fitness:
         return "ohio_time_exit"
 
-    if transition_risk > p.regime_exit_risk:
+    # Regime exit: only for losing trades during regime transitions.
+    # Prevents small losses from becoming trailing_stop losses (-1.5% avg).
+    if transition_risk > p.regime_exit_risk and current_profit < 0.005:
         return "ohio_regime_exit"
 
     if current_profit > p.profit_preserve_profit and fitness_score < p.profit_preserve_fitness:

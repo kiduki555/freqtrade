@@ -9,25 +9,25 @@ description: >
 preferences:
   downside_pressure:
     weight: 0.30
-    ideal: 0.05        # near-zero downside pressure
+    ideal: 0.05
   volatility_level:
     weight: 0.25
-    ideal: 0.15        # very low volatility — calm markets
+    ideal: 0.15
   liquidity_stress:
     weight: 0.18
-    ideal: 0.10        # high liquidity needed for safe exits
+    ideal: 0.10
   correlation_stress:
     weight: 0.12
-    ideal: 0.20        # low correlation stress — orderly markets
+    ideal: 0.20
   trend_persistence:
     weight: 0.08
-    ideal: 0.00        # flat/sideways — not chasing trends in risky env
+    ideal: 0.00
   relative_strength:
     weight: 0.05
-    ideal: 0.50        # neutral relative strength acceptable
+    ideal: 0.50
   breadth_dispersion:
     weight: 0.02
-    ideal: 0.20        # low dispersion — broad market stability
+    ideal: 0.20
 
 meta_confidence_weight: 0.08   # slightly higher than others — only act when data is reliable
 meta_stability_weight: 0.07    # slightly higher than others — state must be settled
@@ -37,3 +37,4 @@ leverage_range: [1.0, 1.0]      # 1x only — no amplification in defensive mode
 atr_stop_direction: tighten
 atr_scale_cap: 2.0
 chandelier_enabled: false
+hard_floor: -0.03

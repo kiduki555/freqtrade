@@ -414,6 +414,20 @@ class FitnessEstimator:
         adjusted = flattened * hedge_weights
         best_indices = np.argmax(adjusted, axis=1)
 
+        # Confidence gate: only switch modes when fitness gap > threshold.
+        # Prevents whipsawing between modes on noise.
+        _CONFIDENCE_GAP = 0.15
+        best_scores = adjusted[np.arange(len(adjusted)), best_indices]
+        gated_indices = best_indices.copy()
+        for t in range(1, len(gated_indices)):
+            if gated_indices[t] != gated_indices[t - 1]:
+                prev_mode_score = adjusted[t, gated_indices[t - 1]]
+                new_mode_score = best_scores[t]
+                # Keep previous mode unless new mode is significantly better
+                if (new_mode_score - prev_mode_score) < _CONFIDENCE_GAP * new_mode_score:
+                    gated_indices[t] = gated_indices[t - 1]
+        best_indices = gated_indices
+
         mode_values = np.array([m.value for m in mode_order])
         df["ohio_active_mode"] = mode_values[best_indices]
 

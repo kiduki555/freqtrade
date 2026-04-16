@@ -8,7 +8,6 @@ Completed in FT-017: all pipeline modules are wired.
 from __future__ import annotations
 
 import logging
-import math
 from datetime import datetime, timezone
 
 import numpy as np
@@ -25,17 +24,9 @@ from freqtrade.ohio.adapters.freqtrade.cross_asset_provider import (
     compute_peer_returns,
     fetch_peer_closes,
 )
-from freqtrade.ohio.adapters.freqtrade.entry_adapter import EntryAdapter
-from freqtrade.ohio.adapters.freqtrade.exit_adapter import (
-    ExitParams,
-    compute_exit,
-    compute_stoploss,
-)
+from freqtrade.ohio.adapters.freqtrade.exit_adapter import ExitParams
 from freqtrade.strategy.parameters import DecimalParameter, IntParameter
-from freqtrade.ohio.adapters.freqtrade.metadata_handler import (
-    get_trade_mode,
-    save_entry_metadata,
-)
+from freqtrade.ohio.adapters.freqtrade.metadata_handler import save_entry_metadata
 from freqtrade.ohio.adapters.freqtrade.position_adapter import (
     compute_leverage,
     compute_stake,
@@ -77,16 +68,17 @@ class OhioThinStrategy(IStrategy):
     startup_candle_count = 4320  # 180 days warmup
 
     # Stoploss: hard ceiling — custom_stoploss narrows per mode
-    stoploss = -0.20
+    stoploss = -0.341
 
-    # Minimal ROI disabled — exits handled by custom_exit
-    minimal_roi = {"0": 100}  # effectively disabled
+    # ROI targets for 1H crypto — take profits quickly
+    minimal_roi = {"0": 0.05, "24": 0.03, "72": 0.02, "168": 0.01, "336": 0}
 
     # Enable features we need
     use_custom_stoploss = True
     use_exit_signal = True
     exit_profit_only = False
     process_only_new_candles = True
+    position_adjustment_enable = True
     # V2: long/short via trend direction (ohio_stable_trend).
     can_short = True
 
@@ -94,16 +86,16 @@ class OhioThinStrategy(IStrategy):
     # Hyperopt parameters
     # ------------------------------------------------------------------
 
-    # Hedge algorithm — Stage 1 optimized, LOCKED
-    hedge_eta = DecimalParameter(0.01, 0.50, default=0.40, decimals=2, space="buy", optimize=False)
-    hedge_temperature = DecimalParameter(0.5, 5.0, default=3.6, decimals=1, space="buy", optimize=False)
+    # Hedge algorithm — hyperopt-optimized values
+    hedge_eta = DecimalParameter(0.01, 0.50, default=0.16, decimals=2, space="buy", optimize=True)
+    hedge_temperature = DecimalParameter(0.5, 5.0, default=0.5, decimals=1, space="buy", optimize=True)
 
-    # Policy — Stage 1 optimized, LOCKED
-    disabled_threshold = DecimalParameter(0.20, 0.60, default=0.34, decimals=2, space="buy", optimize=False)
+    # Policy — hyperopt-optimized
+    disabled_threshold = DecimalParameter(0.20, 0.60, default=0.35, decimals=2, space="buy", optimize=True)
     min_trend_confidence = DecimalParameter(0.05, 0.25, default=0.05, decimals=2, space="buy", optimize=False)  # noqa: E501
 
     # Regime maturity cooldown — Stage 1 optimized, LOCKED
-    regime_cooldown_bars = IntParameter(0, 10, default=10, space="buy", optimize=False)
+    regime_cooldown_bars = IntParameter(0, 10, default=0, space="buy", optimize=False)
 
     # --- Mode-specific entry parameters (buy space) ---
     # >>> ALL STAGES COMPLETE — Final optimized values <<<
@@ -122,30 +114,29 @@ class OhioThinStrategy(IStrategy):
 
     # Breakout — Stage 3a LOCKED (Sharpe -0.22, 200 epochs)
     bo_squeeze_min_bars = IntParameter(3, 10, default=5, space="buy", optimize=False)
-    bo_volume_mult = DecimalParameter(1.2, 2.5, default=1.6, decimals=1, space="buy", optimize=False)
     bo_donchian_window = IntParameter(10, 30, default=13, space="buy", optimize=False)
 
     # Defensive — Stage 3b LOCKED (Sharpe +0.38, 200 epochs)
     def_adx_max = DecimalParameter(15.0, 30.0, default=17.9, decimals=1, space="buy", optimize=False)
     def_vol_scale = DecimalParameter(0.05, 0.30, default=0.18, decimals=2, space="buy", optimize=False)
-    def_min_trend_abs = DecimalParameter(0.01, 0.10, default=0.01, decimals=2, space="buy", optimize=False)
+    def_min_trend_abs = DecimalParameter(0.01, 0.10, default=0.06, decimals=2, space="buy", optimize=False)
 
     # Exit timing — Stage 4a LOCKED (Sharpe +1.43, 400 epochs)
     time_exit_bars = IntParameter(6, 48, default=31, space="sell", optimize=False)
     time_exit_fitness = DecimalParameter(0.20, 0.55, default=0.47, decimals=2, space="sell", optimize=False)
 
-    # Exit — regime — Stage 4a LOCKED
-    regime_exit_risk = DecimalParameter(0.50, 0.80, default=0.69, decimals=2, space="sell", optimize=False)
+    # Exit — regime (hyperopt-optimized)
+    regime_exit_risk = DecimalParameter(0.50, 0.99, default=0.70, decimals=2, space="sell", optimize=True)
 
-    # Exit — profit preserve — Stage 4a LOCKED
-    profit_preserve_profit = DecimalParameter(0.01, 0.08, default=0.01, decimals=2, space="sell", optimize=False)
+    # Exit — profit preserve (hyperopt-optimized)
+    profit_preserve_profit = DecimalParameter(0.01, 0.08, default=0.04, decimals=2, space="sell", optimize=True)
     profit_preserve_fitness = DecimalParameter(0.30, 0.60, default=0.58, decimals=2, space="sell", optimize=False)
 
-    # Stoploss — Stage 4b LOCKED (Sharpe +1.47, 300 epochs)
-    trailing_profit_threshold = DecimalParameter(0.005, 0.05, default=0.048, decimals=3, space="sell", optimize=False)
-    trailing_profit_ratio = DecimalParameter(0.30, 0.70, default=0.52, decimals=2, space="sell", optimize=False)
-    transition_tighten_factor = DecimalParameter(0.50, 0.90, default=0.76, decimals=2, space="sell", optimize=False)
-    sl_hard_floor = DecimalParameter(-0.30, -0.10, default=-0.13, decimals=2, space="sell", optimize=False)
+    # Stoploss (hyperopt-optimized)
+    trailing_profit_threshold = DecimalParameter(0.005, 0.05, default=0.018, decimals=3, space="sell", optimize=True)
+    trailing_profit_ratio = DecimalParameter(0.30, 0.70, default=0.63, decimals=2, space="sell", optimize=True)
+    transition_tighten_factor = DecimalParameter(0.50, 0.90, default=0.50, decimals=2, space="sell", optimize=False)
+    sl_hard_floor = DecimalParameter(-0.30, -0.10, default=-0.19, decimals=2, space="sell", optimize=False)
 
     # ------------------------------------------------------------------
     # __init__
@@ -175,8 +166,29 @@ class OhioThinStrategy(IStrategy):
         # Strategy profiles
         self._profiles = load_default_profiles()
 
-        # Mode-specific entry adapter
-        self._entry_adapter = EntryAdapter()
+    # ------------------------------------------------------------------
+    # informative_pairs — Cross-asset peer basket
+    # ------------------------------------------------------------------
+    def informative_pairs(self) -> list[tuple[str, str]]:
+        """Declare peer basket pairs so Freqtrade pre-fetches their OHLCV data.
+
+        Uses the futures contract format (pair:settle) to match the trading mode.
+        Without this, dp.get_pair_dataframe() returns empty for non-whitelist peers,
+        leaving correlation_stress and breadth_dispersion as NaN in live/dryrun.
+        """
+        from freqtrade.ohio.adapters.freqtrade.cross_asset_provider import DEFAULT_PEERS
+        # Convert spot format to futures format for the exchange settle currency
+        settle = self.config.get("stake_currency", "USDT")
+        pairs = [
+            (f"{pair}:{settle}", self.timeframe)
+            for pair in DEFAULT_PEERS
+        ]
+        # 4H timeframe for each whitelist pair — multi-TF regime confirmation
+        whitelist = self.dp.current_whitelist() if self.dp else []
+        for pair in whitelist:
+            pairs.append((pair, "4h"))
+            pairs.append((pair, "1d"))  # NEW: daily regime filter
+        return pairs
 
     # ------------------------------------------------------------------
     # populate_indicators — Full 7-Phase Pipeline
@@ -194,7 +206,8 @@ class OhioThinStrategy(IStrategy):
 
         # Phase 2b: Cross-asset features (correlation_stress, breadth_dispersion)
         try:
-            peer_closes = fetch_peer_closes(self.dp, metadata["pair"])
+            settle = self.config.get("stake_currency", "USDT")
+            peer_closes = fetch_peer_closes(self.dp, metadata["pair"], settle=settle)
             if len(peer_closes) >= 2:
                 peer_returns = compute_peer_returns(peer_closes)
                 corr_series = compute_correlation_stress(peer_returns)
@@ -243,75 +256,201 @@ class OhioThinStrategy(IStrategy):
         dataframe = self._fitness_estimator.compute_dataframe(dataframe)
         dataframe = self._policy_generator.generate_dataframe(dataframe)
 
+        # Phase 2c: 4H multi-timeframe features for regime confirmation
+        try:
+            df_4h = self.dp.get_pair_dataframe(metadata["pair"], "4h")
+            if df_4h is not None and len(df_4h) > 20:
+                # 4H ADX — Wilder's ADX(14) inline (same logic as FeatureBuilder)
+                period = 14
+                alpha = 1.0 / period
+                high_4h = df_4h["high"]
+                low_4h = df_4h["low"]
+                close_4h = df_4h["close"]
+                hl = high_4h - low_4h
+                hpc = (high_4h - close_4h.shift(1)).abs()
+                lpc = (low_4h - close_4h.shift(1)).abs()
+                tr = pd.concat([hl, hpc, lpc], axis=1).max(axis=1)
+                up_move = high_4h.diff()
+                down_move = -low_4h.diff()
+                plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+                minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+                plus_dm_s = pd.Series(plus_dm, index=df_4h.index, dtype=float)
+                minus_dm_s = pd.Series(minus_dm, index=df_4h.index, dtype=float)
+                tr_smooth = tr.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+                pdm_smooth = plus_dm_s.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+                mdm_smooth = minus_dm_s.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+                plus_di = 100 * pdm_smooth / tr_smooth.replace(0, np.nan)
+                minus_di = 100 * mdm_smooth / tr_smooth.replace(0, np.nan)
+                di_sum = plus_di + minus_di
+                dx = 100 * (plus_di - minus_di).abs() / di_sum.replace(0, np.nan)
+                adx_4h = dx.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+
+                # 4H SMA slope (SMA20 direction)
+                sma_4h = close_4h.rolling(20).mean()
+                sma_slope_4h = (sma_4h - sma_4h.shift(4)) / (sma_4h.shift(4) + 1e-10)
+
+                # Merge by aligning timestamps — use merge_asof for proper time alignment
+                df_4h_features = df_4h[["date"]].copy()
+                df_4h_features["ohio_4h_adx"] = adx_4h.values
+                df_4h_features["ohio_4h_sma_slope"] = sma_slope_4h.values
+
+                # Merge into 1H dataframe by nearest date (4H candle applies to all 1H candles within it)
+                if "date" in dataframe.columns:
+                    dataframe = pd.merge_asof(
+                        dataframe.sort_values("date"),
+                        df_4h_features.sort_values("date"),
+                        on="date",
+                        direction="backward",
+                    )
+                else:
+                    logger.warning("ohio.4h_features | no date column, skipping 4H merge")
+            else:
+                logger.warning("ohio.4h_features | insufficient 4H data for %s", metadata["pair"])
+        except Exception:
+            logger.warning("ohio.4h_features | failed for %s", metadata["pair"], exc_info=True)
+
+        # Phase 2d: 1D daily regime filter
+        try:
+            df_1d = self.dp.get_pair_dataframe(metadata["pair"], "1d")
+            if df_1d is not None and len(df_1d) > 50:
+                close_1d = df_1d["close"]
+                ema_fast_1d = close_1d.ewm(span=10, adjust=False).mean()
+                ema_slow_1d = close_1d.ewm(span=20, adjust=False).mean()
+                sma_50_1d = close_1d.rolling(50).mean()
+
+                # Bull: 10 EMA > 20 EMA AND close > 50 SMA
+                # Bear: 10 EMA < 20 EMA AND close < 50 SMA
+                # Choppy: mixed signals
+                regime_1d = pd.Series("choppy", index=df_1d.index, dtype=object)
+                bull_cond = (ema_fast_1d > ema_slow_1d) & (close_1d > sma_50_1d)
+                bear_cond = (ema_fast_1d < ema_slow_1d) & (close_1d < sma_50_1d)
+                regime_1d.loc[bull_cond] = "bull"
+                regime_1d.loc[bear_cond] = "bear"
+
+                df_1d_feat = df_1d[["date"]].copy()
+                df_1d_feat["ohio_1d_regime"] = regime_1d.values
+
+                if "date" in dataframe.columns:
+                    dataframe = pd.merge_asof(
+                        dataframe.sort_values("date"),
+                        df_1d_feat.sort_values("date"),
+                        on="date",
+                        direction="backward",
+                    )
+            else:
+                logger.warning("ohio.1d_regime | insufficient 1D data for %s", metadata["pair"])
+        except Exception:
+            logger.warning("ohio.1d_regime | failed for %s", metadata["pair"], exc_info=True)
+
         return dataframe
 
     # ------------------------------------------------------------------
-    # populate_entry_trend — Fitness-based Entry Signals
+    # populate_entry_trend — Independent OR-combined Entry Signals
     # ------------------------------------------------------------------
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        """Generate entry signals via mode-specific EntryAdapter strategies."""
+        """Generate entry signals via independent OR-combined strategies.
+
+        Architecture: Multiple independent signals fire independently.
+        Ohio StateVector is used for risk sizing, NOT entry gating.
+        """
         logger.info("ohio.populate_entry_trend | pair=%s", metadata["pair"])
         dataframe["enter_long"] = 0
         dataframe["enter_short"] = 0
         dataframe["enter_tag"] = ""
 
-        # Entry condition: policy enabled
-        enabled = dataframe["ohio_policy_enabled"] == True  # noqa: E712
-        active = dataframe["ohio_active_mode"]
+        # Entry strategies — MACD div removed (no edge), breakout removed (false breakouts)
+        from freqtrade.ohio.adapters.freqtrade.entries.ema_cross import EMACrossEntry
+        from freqtrade.ohio.adapters.freqtrade.entries.bb_dip import BBDipEntry
 
-        # Fitness gate: active mode fitness must exceed disabled_threshold + entry_adj
-        threshold = self.disabled_threshold.value
-        entry_adj = dataframe.get(
-            "ohio_policy_entry_threshold_adj",
+        entry_params = self._entry_params_dict()
+
+        # EMA cross: both long and short (net positive in testing)
+        ema = EMACrossEntry()
+        df_ema = ema.compute_entries(dataframe.copy(), entry_params)
+        for side, col, suffix in [("long", "enter_long", ""), ("short", "enter_short", "_short")]:
+            mask = (df_ema[col] == 1) & (dataframe[col] == 0)
+            dataframe.loc[mask, col] = 1
+            dataframe.loc[mask, "enter_tag"] = f"ohio_ema_cross{suffix}"
+
+        # BB dip: LONG ONLY (4H trend filter in bb_dip.py prevents buying in bear)
+        bb = BBDipEntry()
+        df_bb = bb.compute_entries(dataframe.copy(), entry_params)
+        long_mask = (df_bb["enter_long"] == 1) & (dataframe["enter_long"] == 0)
+        dataframe.loc[long_mask, "enter_long"] = 1
+        dataframe.loc[long_mask, "enter_tag"] = "ohio_bb_dip"
+
+        # Suppress longs when ohio_stable_trend is bearish (tightened from -0.20 to -0.10)
+        bearish = dataframe.get("ohio_stable_trend", pd.Series(0.0, index=dataframe.index)) < -0.10
+        suppress_long = bearish & (dataframe["enter_long"] == 1)
+        dataframe.loc[suppress_long, "enter_long"] = 0
+        dataframe.loc[suppress_long, "enter_tag"] = ""
+
+        # Suppress shorts when ohio_stable_trend is bullish (tightened from 0.20 to 0.10)
+        bullish = dataframe.get("ohio_stable_trend", pd.Series(0.0, index=dataframe.index)) > 0.10
+        suppress_short = bullish & (dataframe["enter_short"] == 1)
+        dataframe.loc[suppress_short, "enter_short"] = 0
+        dataframe.loc[suppress_short, "enter_tag"] = ""
+
+        # Meta signal gates — block entries during regime instability
+        transition_risk = dataframe.get(
+            "ohio_meta_transition_risk",
             pd.Series(0.0, index=dataframe.index),
         )
-        # Vectorized fitness lookup — avoid slow .apply(lambda)
-        fitness = pd.Series(np.nan, index=dataframe.index)
-        for mode in ["trend_following", "mean_reversion", "breakout", "defensive"]:
-            mask = active == mode
-            col = f"ohio_fitness_{mode}"
-            if col in dataframe.columns:
-                fitness = fitness.where(~mask, dataframe[col])
-        # NaN fitness (unknown/missing mode) → 0.0 → blocked by gate
-        unmatched = fitness.isna().sum()
-        if unmatched > 0:
-            logger.warning(
-                "ohio.entry_filter | %d rows with unmatched active_mode → fitness=0",
-                unmatched,
-            )
-        fitness_gate = fitness.fillna(0.0) >= (threshold + entry_adj)
+        confidence = dataframe.get(
+            "ohio_meta_confidence",
+            pd.Series(1.0, index=dataframe.index),
+        )
 
-        # Regime maturity cooldown gate.
-        cooldown = self.regime_cooldown_bars.value
-        cooldown_gate = pd.Series(True, index=dataframe.index)
-        if cooldown > 0:
-            mode_changed = active != active.shift(1)
-            regime_group = mode_changed.cumsum()
-            regime_age = regime_group.groupby(regime_group).cumcount()
-            cooldown_gate = regime_age >= cooldown
+        # Block all entries when regime is transitioning OR state is low quality
+        meta_block = (transition_risk > 0.80) | (confidence < 0.30)
+        block_mask = meta_block & (
+            (dataframe["enter_long"] == 1) | (dataframe["enter_short"] == 1)
+        )
+        dataframe.loc[block_mask, "enter_long"] = 0
+        dataframe.loc[block_mask, "enter_short"] = 0
+        dataframe.loc[block_mask, "enter_tag"] = ""
 
-        base_mask = enabled.fillna(False) & fitness_gate & cooldown_gate
+        # Correlation stress gate — skip when whole market moves together
+        corr_stress = dataframe.get(
+            "ohio_factor_correlation",
+            pd.Series(0.5, index=dataframe.index),
+        )
+        high_corr = corr_stress > 0.85
+        corr_block = high_corr & (
+            (dataframe["enter_long"] == 1) | (dataframe["enter_short"] == 1)
+        )
+        dataframe.loc[corr_block, "enter_long"] = 0
+        dataframe.loc[corr_block, "enter_short"] = 0
+        dataframe.loc[corr_block, "enter_tag"] = ""
 
-        # --- Mode-specific entry via EntryAdapter ---
-        entry_params = self._entry_params_dict()
-        for mode in ["trend_following", "mean_reversion", "breakout", "defensive"]:
-            mode_rows = active == mode
-            if not mode_rows.any():
-                continue
+        # 1D regime filter — asymmetric directional bias + no-trade in chop
+        regime_1d = dataframe.get("ohio_1d_regime", pd.Series("choppy", index=dataframe.index))
 
-            # Run mode-specific strategy on the full dataframe (vectorized)
-            # then mask to only rows where this mode is active
-            mode_df = dataframe.copy()
-            mode_df = self._entry_adapter.compute_entries(mode_df, mode, entry_params)
+        # In bull regime: block shorts (don't fight uptrend)
+        bull_rows = regime_1d == "bull"
+        block_shorts = bull_rows & (dataframe["enter_short"] == 1)
+        dataframe.loc[block_shorts, "enter_short"] = 0
+        dataframe.loc[block_shorts, "enter_tag"] = dataframe.loc[block_shorts, "enter_tag"].where(
+            dataframe.loc[block_shorts, "enter_long"] == 1, ""
+        )
 
-            mode_mask = base_mask & mode_rows
-            long_mask = mode_mask & (mode_df["enter_long"] == 1)
-            short_mask = mode_mask & (mode_df["enter_short"] == 1)
+        # In bear regime: block longs (don't fight downtrend)
+        bear_rows = regime_1d == "bear"
+        block_longs = bear_rows & (dataframe["enter_long"] == 1)
+        dataframe.loc[block_longs, "enter_long"] = 0
+        dataframe.loc[block_longs, "enter_tag"] = dataframe.loc[block_longs, "enter_tag"].where(
+            dataframe.loc[block_longs, "enter_short"] == 1, ""
+        )
 
-            dataframe.loc[long_mask, "enter_long"] = 1
-            dataframe.loc[long_mask, "enter_tag"] = f"ohio_{mode}"
-            dataframe.loc[short_mask, "enter_short"] = 1
-            dataframe.loc[short_mask, "enter_tag"] = f"ohio_{mode}_short"
+        # In choppy regime: block ALL entries (no-trade zone)
+        # Preserves capital during indecisive markets
+        choppy_rows = regime_1d == "choppy"
+        choppy_block = choppy_rows & (
+            (dataframe["enter_long"] == 1) | (dataframe["enter_short"] == 1)
+        )
+        dataframe.loc[choppy_block, "enter_long"] = 0
+        dataframe.loc[choppy_block, "enter_short"] = 0
+        dataframe.loc[choppy_block, "enter_tag"] = ""
 
         return dataframe
 
@@ -361,6 +500,10 @@ class OhioThinStrategy(IStrategy):
         fitness = self._get_best_fitness(last)
         dd_scale = self._dd_controller.size_scale
 
+        # Cross-asset correlation stress and per-asset volatility for sizing
+        corr_stress = float(last.get("ohio_factor_correlation", 0.5))
+        asset_vol = float(last.get("ohio_feat_atr_ratio_14", 0.0))
+
         stake = compute_stake(
             policy=policy,
             fitness_score=fitness,
@@ -368,6 +511,8 @@ class OhioThinStrategy(IStrategy):
             min_stake=min_stake,
             max_stake=max_stake,
             dd_scale=dd_scale,
+            correlation_stress=corr_stress,
+            asset_volatility=asset_vol,
         )
         return stake
 
@@ -385,16 +530,8 @@ class OhioThinStrategy(IStrategy):
         side: str,
         **kwargs,
     ) -> float:
-        """Mode-specific leverage via OHIO policy."""
-        logger.info("ohio.leverage | pair=%s | entry_tag=%s", pair, entry_tag)
-
-        mode = self._extract_mode(entry_tag)
-        profile = self._get_profile_for_mode(mode) if mode else None
-        if profile is None:
-            return 1.0
-
-        fitness = self._get_fitness_for_pair(pair)
-        return compute_leverage(profile, fitness, max_leverage)
+        """1x leverage — leverage keeps hurting R:R until we redesign stops."""
+        return 1.0
 
     # ------------------------------------------------------------------
     # confirm_trade_entry — Risk Gate
@@ -472,8 +609,12 @@ class OhioThinStrategy(IStrategy):
                 meta_snapshot = self._build_meta_from_row(last)
                 save_entry_metadata(trade, trade.enter_tag, fitness, meta_snapshot)
 
+                # Store entry ATR for partial-exit calculations
+                entry_atr = float(last.get("ohio_feat_atr_ratio_14", 0.02))
+                trade.set_custom_data("entry_atr", entry_atr)
+
     # ------------------------------------------------------------------
-    # custom_stoploss — Dynamic Stoploss
+    # custom_stoploss — ATR Trailing Stoploss
     # ------------------------------------------------------------------
     def custom_stoploss(
         self,
@@ -485,47 +626,69 @@ class OhioThinStrategy(IStrategy):
         after_fill: bool,
         **kwargs,
     ) -> float | None:
-        """Mode-specific dynamic stoploss."""
-        mode = get_trade_mode(trade)
-        if mode is None:
-            return None  # use default self.stoploss
+        """Structure-based stoploss with 3 phases:
 
-        profile = self._get_profile_for_mode(mode)
-        if profile is None:
-            return None
-
+        Phase 1 (bars 0-12): swing low/high - 0.5*ATR buffer (real invalidation)
+        Phase 2 (+1R): breakeven + 0.2% lock
+        Phase 3 (+2R): Chandelier trailing at 2.5x ATR
+        """
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if dataframe is None or len(dataframe) == 0:
-            return None
+            return -0.04  # safe fallback
 
         last = dataframe.iloc[-1]
-        policy = self._build_policy_from_row(last)
-        transition_risk = float(last.get("ohio_meta_transition_risk", 0.0))
-        fitness = self._get_best_fitness(last)
+        atr_ratio = float(last.get("ohio_feat_atr_ratio_14", 0.02))
+        entry_rate = trade.open_rate
+        is_long = not trade.is_short
 
-        atr_ratio = float(last.get("ohio_feat_atr_ratio_14", 0.0))
-        atr_baseline = float(last.get("ohio_feat_atr_baseline", 0.0))
+        # Determine entry type — MR (BB dip) needs wider stops vs TF (EMA cross)
+        entry_tag = trade.enter_tag or ""
+        is_mr = "bb_dip" in entry_tag
+        is_tf = "ema_cross" in entry_tag or "breakout" in entry_tag
 
-        # Default to 1.0 if baseline unavailable (warmup/NaN)
-        if (
-            atr_baseline > 0
-            and atr_ratio > 0
-            and not math.isnan(atr_baseline)
-            and not math.isnan(atr_ratio)
-        ):
-            atr_scale = atr_ratio / atr_baseline
-        else:
-            atr_scale = 1.0
+        # 1R definition: ~2x ATR magnitude
+        one_r = 2.0 * atr_ratio
 
-        return compute_stoploss(
-            profile, policy, current_profit, transition_risk, fitness,
-            atr_scale=atr_scale,
-            atr_ratio=atr_ratio,
-            params=self._exit_params(),
-        )
+        bars = self._bars_since_entry(trade, current_time)
+
+        # Phase 3: Chandelier trailing at +2R profit (applies to all types)
+        if current_profit >= 2.0 * one_r:
+            return -(2.5 * atr_ratio)
+
+        # Phase 2: Breakeven+0.2% at +1R profit
+        if current_profit >= one_r:
+            lock = current_profit - one_r - 0.002
+            return -max(0.0, lock) if lock > 0 else -0.005
+
+        # Phase 1: Entry-type specific initial stop
+        if is_mr:
+            # MR (BB dip): wider stop — MR needs room for mean reversion to develop
+            # Use 3.5x ATR, floor at -5%
+            return max(-(atr_ratio * 3.5), -0.05)
+
+        if is_tf:
+            # TF (EMA cross/breakout): structure-based stop using recent swing
+            # Keep structure stop active throughout trade (not just 12 bars)
+            # Lookback grows with time to follow the trend
+            lookback_n = min(len(dataframe), max(bars + 10, 20))
+            lookback = dataframe.tail(lookback_n)
+            if is_long:
+                swing_low = float(lookback["low"].min())
+                stop_price = swing_low - (0.5 * atr_ratio * entry_rate)
+                stop_ratio = (stop_price / entry_rate) - 1.0
+            else:
+                swing_high = float(lookback["high"].max())
+                stop_price = swing_high + (0.5 * atr_ratio * entry_rate)
+                stop_ratio = 1.0 - (stop_price / entry_rate)
+            # Widen clamp for long-held trades (let trends breathe)
+            max_width = -0.06 if bars > 24 else -0.04
+            return max(max_width, min(-0.015, stop_ratio))
+
+        # Default for unrecognized or stalled trades
+        return -(3.0 * atr_ratio)
 
     # ------------------------------------------------------------------
-    # custom_exit — Multi-condition Exit
+    # custom_exit — Simplified Exit
     # ------------------------------------------------------------------
     def custom_exit(
         self,
@@ -536,26 +699,97 @@ class OhioThinStrategy(IStrategy):
         current_profit: float,
         **kwargs,
     ) -> str | bool | None:
-        """Multi-condition exit engine."""
+        """Simplified exit — let ATR trailing and ROI handle most exits."""
+        # Kill switch
+        if self._kill_switch.active:
+            return "ohio_kill_switch"
+
+        # 1D regime-aware ROI (simulates different roi tables per regime)
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        if dataframe is None or len(dataframe) == 0:
+        if dataframe is not None and len(dataframe) > 0:
+            last = dataframe.iloc[-1]
+            regime_1d = str(last.get("ohio_1d_regime", "choppy"))
+            bars = self._bars_since_entry(trade, current_time)
+
+            is_long = not trade.is_short
+
+            # In bull regime, longs have HIGHER ROI target (let winners run)
+            # In bear regime, shorts have HIGHER ROI target
+            aligned_with_trend = (regime_1d == "bull" and is_long) or (
+                regime_1d == "bear" and not is_long
+            )
+
+            if aligned_with_trend:
+                # Aligned: hold for bigger wins
+                if bars < 24 and current_profit >= 0.10:
+                    return "ohio_aligned_roi_10pct"
+                if bars < 72 and current_profit >= 0.06:
+                    return "ohio_aligned_roi_6pct"
+                if bars < 168 and current_profit >= 0.03:
+                    return "ohio_aligned_roi_3pct"
+
+        # Stale trade: losing > 2% for > 72 bars
+        bars = self._bars_since_entry(trade, current_time)
+        if bars > 72 and current_profit < -0.02:
+            return "ohio_stale_exit"
+
+        return None
+
+    # ------------------------------------------------------------------
+    # adjust_trade_position — Partial Exits (Scaling Out)
+    # ------------------------------------------------------------------
+    def adjust_trade_position(
+        self,
+        trade: Trade,
+        current_time: datetime,
+        current_rate: float,
+        current_profit: float,
+        min_stake: float | None,
+        max_stake: float,
+        current_entry_rate: float,
+        current_exit_rate: float,
+        current_entry_profit: float,
+        current_exit_profit: float,
+        **kwargs,
+    ) -> float | None:
+        """Partial exits: 25% at 1R, 50% (of original) at 2R, 25% runner.
+
+        Uses entry_atr saved in order_filled for 1R calculation.
+        """
+        entry_atr = trade.get_custom_data("entry_atr", default=0.02)
+        if not isinstance(entry_atr, (int, float)):
+            entry_atr = 0.02
+        one_r = 2.0 * float(entry_atr)
+
+        exits_taken = trade.get_custom_data("partial_exits_taken", default=0)
+        if not isinstance(exits_taken, int):
+            exits_taken = 0
+
+        # Only scale down, never add
+        if current_profit <= 0:
             return None
 
-        last = dataframe.iloc[-1]
-        bars_since = self._bars_since_entry(trade, current_time)
-        fitness = self._get_best_fitness(last)
-        transition_risk = float(last.get("ohio_meta_transition_risk", 0.0))
+        # Get current total stake from filled entry orders
+        filled_entries = trade.select_filled_orders(trade.entry_side)
+        if not filled_entries:
+            return None
+        current_stake = sum(float(o.stake_amount or 0) for o in filled_entries)
+        if current_stake <= 0:
+            return None
 
-        active_mode = str(last.get("ohio_active_mode", "defensive"))
-        return compute_exit(
-            bars_since_entry=bars_since,
-            current_profit=current_profit,
-            fitness_score=fitness,
-            transition_risk=transition_risk,
-            is_kill_switch=self._kill_switch.active,
-            active_mode=active_mode,
-            params=self._exit_params(),
-        )
+        # First partial at 1R: exit 25% of current
+        if exits_taken == 0 and current_profit >= one_r:
+            trade.set_custom_data("partial_exits_taken", 1)
+            return -(current_stake * 0.25)
+
+        # Second partial at 2R: exit 50% of ORIGINAL (= 2/3 of remaining 75%)
+        if exits_taken == 1 and current_profit >= 2.0 * one_r:
+            trade.set_custom_data("partial_exits_taken", 2)
+            # original_stake = current_stake / 0.75 (since we already exited 25%)
+            original_stake = current_stake / 0.75
+            return -(original_stake * 0.50)
+
+        return None
 
     # ==================================================================
     # Helper methods
@@ -576,7 +810,6 @@ class OhioThinStrategy(IStrategy):
             "mr_hurst_max": self.mr_hurst_max.value,
             # Breakout
             "bo_squeeze_min_bars": float(self.bo_squeeze_min_bars.value),
-            "bo_volume_mult": self.bo_volume_mult.value,
             "bo_donchian_window": float(self.bo_donchian_window.value),
             # Defensive
             "def_adx_max": self.def_adx_max.value,
@@ -661,7 +894,10 @@ class OhioThinStrategy(IStrategy):
     def _extract_mode(entry_tag: str | None) -> str | None:
         """Extract mode name from entry_tag like 'ohio_trend_following' -> 'trend_following'."""
         if entry_tag and entry_tag.startswith("ohio_"):
-            return entry_tag[5:]
+            mode = entry_tag[5:]
+            if mode.endswith("_short"):
+                mode = mode[:-6]
+            return mode
         return entry_tag
 
     @staticmethod

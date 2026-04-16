@@ -267,9 +267,12 @@ def test_compute_vector_returns_state_vector(neutral_row):
 # ---------------------------------------------------------------------------
 
 def test_all_zero_trend_is_negative(all_zero_row):
-    """All-zero inputs → raw = 0.0 → tanh(2*(0-0.5)) = tanh(-1) ≈ -0.762."""
+    """All-zero explicit inputs + hurst fallback 0.5 → raw = 0.075, vol-adj blended."""
     result = compute_trend(all_zero_row)
-    expected = math.tanh(2.0 * (0.0 - 0.5))
+    # raw = 0.15 * 0.5 = 0.075 (hurst defaults to 0.5)
+    # log_ret=0.0, vol=max(0.0,0.15)=0.15 → centered=-0.5, vol_adj=-3.33, norm=0.0
+    # blended = 0.75*0.075 + 0.25*0.0 = 0.05625
+    expected = math.tanh(2.0 * (0.05625 - 0.5))
     assert result == pytest.approx(expected, abs=1e-9)
     assert result < 0.0
 
@@ -293,9 +296,12 @@ def test_all_zero_liquidity(all_zero_row):
 # ---------------------------------------------------------------------------
 
 def test_all_one_trend_is_positive(all_one_row):
-    """All-one inputs → raw = 1.0 → tanh(2*(1-0.5)) = tanh(1) ≈ 0.762."""
+    """All-one explicit inputs + hurst fallback 0.5 → raw = 0.925, vol-adj blended."""
     result = compute_trend(all_one_row)
-    expected = math.tanh(2.0 * (1.0 - 0.5))
+    # raw = 0.85 + 0.075 = 0.925 (hurst defaults to 0.5)
+    # log_ret=1.0, vol=max(1.0,0.15)=1.0 → centered=0.5, vol_adj=0.5, norm=1.0
+    # blended = 0.75*0.925 + 0.25*1.0 = 0.94375
+    expected = math.tanh(2.0 * (0.94375 - 0.5))
     assert result == pytest.approx(expected, abs=1e-9)
     assert result > 0.0
 
@@ -319,7 +325,7 @@ def test_all_one_liquidity(all_one_row):
 # ---------------------------------------------------------------------------
 
 def test_trend_weights_sum_to_one():
-    weights = [0.35, 0.25, 0.20, 0.20]
+    weights = [0.30, 0.22, 0.17, 0.16, 0.15]
     assert sum(weights) == pytest.approx(1.0)
 
 

@@ -20,10 +20,11 @@ from freqtrade.ohio.core.market_state.factors.volatility import compute_volatili
 __all__ = ["FactorCalculator"]
 
 _TREND_WEIGHTS = {
-    "ohio_norm_log_return_24": 0.35,
-    "ohio_norm_ma_slope_20": 0.25,
-    "ohio_norm_adx_14": 0.20,
-    "ohio_norm_efficiency_ratio_24": 0.20,
+    "ohio_norm_log_return_24": 0.30,
+    "ohio_norm_ma_slope_20": 0.22,
+    "ohio_norm_adx_14": 0.17,
+    "ohio_norm_efficiency_ratio_24": 0.16,
+    "ohio_norm_hurst_168": 0.15,
 }
 _VOL_WEIGHTS = {
     "ohio_norm_realized_vol_24": 0.50,
@@ -62,7 +63,18 @@ class FactorCalculator:
         raw_trend = sum(
             w * _get_col(df, col) for col, w in _TREND_WEIGHTS.items()
         )
-        df["ohio_factor_trend"] = np.tanh(2.0 * (raw_trend - 0.5))
+
+        # Vol-adjusted trend: Sharpe-like signal preserving direction
+        log_ret = _get_col(df, "ohio_norm_log_return_24")
+        real_vol = _get_col(df, "ohio_norm_realized_vol_24")
+        safe_vol = np.maximum(real_vol, 0.15)
+        centered_ret = log_ret - 0.5
+        vol_adj = centered_ret / safe_vol
+        vol_adj_norm = np.clip(vol_adj + 0.5, 0.0, 1.0)
+
+        # Blend: 75% original + 25% vol-adjusted (conservative blend)
+        blended = 0.75 * raw_trend + 0.25 * vol_adj_norm
+        df["ohio_factor_trend"] = np.tanh(2.0 * (blended - 0.5))
 
         # --- volatility_level [0, 1] ---
         raw_vol = sum(w * _get_col(df, col) for col, w in _VOL_WEIGHTS.items())

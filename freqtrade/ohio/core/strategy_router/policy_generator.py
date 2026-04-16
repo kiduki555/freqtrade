@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 # Constants — documented output ranges
 # ---------------------------------------------------------------------------
 
-_SIZE_MIN: float = 0.3
-_SIZE_MAX: float = 1.5
+_SIZE_MIN: float = 0.5  # was 0.3 — floor more aggressive
+_SIZE_MAX: float = 2.0  # was 1.5 — allow bigger on high fitness
 
 _ENTRY_ADJ_HIGH_FITNESS: float = -0.05   # high fitness → easier entry (lower bar)
 _ENTRY_ADJ_LOW_FITNESS: float = 0.15     # low fitness → harder entry (higher bar)

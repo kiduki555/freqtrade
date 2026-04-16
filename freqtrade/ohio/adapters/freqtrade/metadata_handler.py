@@ -22,6 +22,8 @@ def _extract_mode(entry_tag: str | None) -> str:
 
     >>> _extract_mode("ohio_trend_following")
     'trend_following'
+    >>> _extract_mode("ohio_defensive_short")
+    'defensive'
     >>> _extract_mode("breakout")
     'breakout'
     >>> _extract_mode(None)
@@ -30,7 +32,10 @@ def _extract_mode(entry_tag: str | None) -> str:
     if entry_tag is None:
         return "unknown"
     if entry_tag.startswith(_OHIO_PREFIX):
-        return entry_tag[len(_OHIO_PREFIX):]
+        mode = entry_tag[len(_OHIO_PREFIX):]
+        if mode.endswith("_short"):
+            mode = mode[:-6]
+        return mode
     return entry_tag
 
 

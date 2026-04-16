@@ -82,6 +82,8 @@ class StrategyProfile(BaseModel):
     chandelier_enabled: bool = False
     chandelier_multiplier: float = 2.5
     chandelier_activation: float = 0.02
+    # Mode-specific hard floor for stoploss (overrides global hard_floor)
+    hard_floor: float = -0.20
 
     @field_validator("atr_scale_cap")
     @classmethod

@@ -36,3 +36,4 @@ leverage_range: [1.0, 2.0]
 atr_stop_direction: widen
 atr_scale_cap: 2.0
 chandelier_enabled: false
+hard_floor: -0.05

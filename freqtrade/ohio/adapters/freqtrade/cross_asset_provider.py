@@ -124,11 +124,74 @@ def compute_breadth_dispersion(
     return normalized
 
 
+def compute_btc_lead_returns(
+    dp: object,
+    timeframe: str = "1h",
+    settle: str = "USDT",
+    lags: tuple[int, ...] = (1, 2, 3, 4, 5, 6),
+) -> dict[str, pd.Series]:
+    """Compute BTC returns at multiple lags for lead-lag signal.
+
+    Research shows altcoins lag BTC by 2-6 hours post-ETF era (2024+).
+    These lagged BTC returns serve as directional bias features for
+    altcoin entry/exit decisions.
+
+    Args:
+        dp: Freqtrade DataProvider instance (typed as object to avoid import).
+        timeframe: Candle timeframe (default "1h").
+        settle: Futures settle currency for format conversion (default "USDT").
+        lags: Tuple of lag periods in bars to compute returns for.
+
+    Returns:
+        Dict mapping lag name to return series, e.g.:
+        {"btc_ret_lag1": series, ..., "btc_lead_composite": series}.
+        Empty dict on failure.
+    """
+    btc_pair = _to_futures_format("BTC/USDT", settle)
+    try:
+        df = dp.get_pair_dataframe(btc_pair, timeframe)  # type: ignore[union-attr]
+        if df is None or len(df) == 0 or "close" not in df.columns:
+            return {}
+
+        btc_close = df["close"]
+        result: dict[str, pd.Series] = {}
+        for lag in lags:
+            # BTC return over lag bars, shifted back (lead signal for alts)
+            btc_ret = np.log(btc_close / btc_close.shift(lag))
+            result[f"btc_ret_lag{lag}"] = btc_ret
+
+        # Composite: average of lag 1-3 (strongest lead effect)
+        avg_short = (
+            np.log(btc_close / btc_close.shift(1))
+            + np.log(btc_close / btc_close.shift(2))
+            + np.log(btc_close / btc_close.shift(3))
+        ) / 3.0
+        result["btc_lead_composite"] = avg_short
+
+        return result
+    except Exception:
+        logger.warning("Failed to compute BTC lead returns", exc_info=True)
+        return {}
+
+
+def _to_futures_format(pair: str, settle: str = "USDT") -> str:
+    """Convert spot pair format to futures format if not already.
+
+    Examples:
+        "BTC/USDT"      -> "BTC/USDT:USDT"
+        "BTC/USDT:USDT" -> "BTC/USDT:USDT"  (no-op)
+    """
+    if ":" in pair:
+        return pair
+    return f"{pair}:{settle}"
+
+
 def fetch_peer_closes(
     dp: object,
     symbol: str,
     timeframe: str = "1h",
     peers: list[str] | None = None,
+    settle: str = "USDT",
 ) -> dict[str, pd.Series]:
     """Fetch close prices for peer basket from Freqtrade DataProvider.
 
@@ -139,6 +202,7 @@ def fetch_peer_closes(
         symbol: Current trading pair (excluded from peers).
         timeframe: Candle timeframe.
         peers: Custom peer list (default: DEFAULT_PEERS).
+        settle: Futures settle currency for format conversion (default: USDT).
 
     Returns:
         {pair: close_series} dict for available peers.
@@ -147,13 +211,15 @@ def fetch_peer_closes(
     closes: dict[str, pd.Series] = {}
 
     for pair in peer_list:
+        # Convert to futures format to match the bot's trading mode
+        futures_pair = _to_futures_format(pair, settle)
         try:
-            df = dp.get_pair_dataframe(pair, timeframe)  # type: ignore[union-attr]
+            df = dp.get_pair_dataframe(futures_pair, timeframe)  # type: ignore[union-attr]
             if df is not None and len(df) > 0 and "close" in df.columns:
                 closes[pair] = df["close"]
             else:
-                logger.warning("No data for peer %s", pair)
+                logger.warning("No data for peer %s", futures_pair)
         except Exception:
-            logger.warning("Failed to fetch peer %s", pair, exc_info=True)
+            logger.warning("Failed to fetch peer %s", futures_pair, exc_info=True)
 
     return closes

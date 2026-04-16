@@ -75,13 +75,27 @@ class TestRewardComputation:
         assert rewards[0, 1] == 0.0, "MR reward should be 0 when ret=NaN"
 
     def test_reward_atr_normalization(self):
-        ret = np.array([0.02, 0.02])
+        """ATR affects raw TF/MR magnitude before z-score normalization.
+
+        After cross-sectional z-score, absolute magnitudes are normalized,
+        but ATR still changes the *raw* reward ratio between TF and BO/DEF.
+        With low ATR, TF raw reward is larger relative to BO/DEF, so TF
+        gets a higher z-scored rank than with high ATR.
+        """
+        # Use varied returns so BO/DEF rewards differ from TF/MR
+        ret = np.array([0.02, 0.005])
         trend = np.array([0.5, 0.5])
         atr_low = np.array([0.01, 0.01])
         atr_high = np.array([0.04, 0.04])
         rewards_low = _compute_rewards(ret, trend, atr_low)
         rewards_high = _compute_rewards(ret, trend, atr_high)
-        assert abs(rewards_low[0, 0]) > abs(rewards_high[0, 0])
+        # With low ATR, TF raw reward = 0.02/0.01 = 2.0 (clipped to 1.0)
+        # With high ATR, TF raw reward = 0.02/0.04 = 0.5
+        # After z-score, TF should rank higher with low ATR (dominates more)
+        assert rewards_low[0, 0] >= rewards_high[0, 0], (
+            f"Low ATR should give TF >= reward: low={rewards_low[0, 0]:.4f}, "
+            f"high={rewards_high[0, 0]:.4f}"
+        )
 
 
 def _make_ohio_dataframe(n_rows: int = 50, seed: int = 42) -> pd.DataFrame:

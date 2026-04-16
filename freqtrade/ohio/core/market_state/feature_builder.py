@@ -12,6 +12,11 @@ Usage (inside populate_indicators)::
 
     builder = FeatureBuilder()
     dataframe = builder.compute(dataframe)
+
+BTC lead-lag features are computed separately in
+``cross_asset_provider.compute_btc_lead_returns()`` and wired into the pipeline
+via ``thin_strategy.populate_indicators()``.
+Features: btc_ret_lag1..6, btc_lead_composite.
 """
 
 from __future__ import annotations

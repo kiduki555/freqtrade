@@ -38,3 +38,4 @@ atr_scale_cap: 2.0
 chandelier_enabled: true
 chandelier_multiplier: 2.5
 chandelier_activation: 0.02
+hard_floor: -0.08
