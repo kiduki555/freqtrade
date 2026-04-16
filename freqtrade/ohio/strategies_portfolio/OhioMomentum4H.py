@@ -26,6 +26,7 @@ from pandas import DataFrame
 
 from freqtrade.persistence import Trade
 from freqtrade.strategy.interface import IStrategy
+from freqtrade.strategy.parameters import DecimalParameter, IntParameter
 
 
 class OhioMomentum4H(IStrategy):
@@ -46,15 +47,25 @@ class OhioMomentum4H(IStrategy):
     can_short = True
     position_adjustment_enable = False
 
+    # --- Hyperopt-optimized parameters (training 2024-08 to 2025-11, +26.31%) ---
+    donchian_window = IntParameter(20, 60, default=34, space="buy", optimize=True)
+    adx_threshold = IntParameter(15, 35, default=34, space="buy", optimize=True)
+    volume_mult = DecimalParameter(1.0, 2.5, default=1.5, decimals=1, space="buy", optimize=True)
+
+    # Stop multipliers (hyperopt-optimized)
+    atr_initial_mult = DecimalParameter(1.5, 4.0, default=3.1, decimals=1, space="sell", optimize=True)
+    atr_trail_mult = DecimalParameter(1.0, 2.5, default=1.5, decimals=1, space="sell", optimize=True)
+    stop_floor = DecimalParameter(-0.12, -0.04, default=-0.08, decimals=2, space="sell", optimize=True)
+
     def informative_pairs(self) -> list[tuple[str, str]]:
         whitelist = self.dp.current_whitelist() if self.dp else []
         return [(pair, "1d") for pair in whitelist]
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """Compute Donchian channels, ATR, ADX, and 1D trend."""
-        # Donchian channel 40 bars (more selective than 20 on 4H)
-        dataframe["donchian_upper_40"] = dataframe["high"].rolling(40).max().shift(1)
-        dataframe["donchian_lower_40"] = dataframe["low"].rolling(40).min().shift(1)
+        dc_win = self.donchian_window.value
+        dataframe["donchian_upper_40"] = dataframe["high"].rolling(dc_win).max().shift(1)
+        dataframe["donchian_lower_40"] = dataframe["low"].rolling(dc_win).min().shift(1)
 
         # ATR for stops — Wilder's
         period = 14
@@ -124,8 +135,8 @@ class OhioMomentum4H(IStrategy):
         dataframe["enter_tag"] = ""
 
         close = dataframe["close"]
-        volume_ok = dataframe["volume"] > (1.5 * dataframe["vol_sma_20"])
-        trend_strong = dataframe["adx_14"] > 25
+        volume_ok = dataframe["volume"] > (self.volume_mult.value * dataframe["vol_sma_20"])
+        trend_strong = dataframe["adx_14"] > self.adx_threshold.value
 
         # Fresh breakout — crosses level this bar
         break_up = (close > dataframe["donchian_upper_40"]) & (
@@ -172,18 +183,17 @@ class OhioMomentum4H(IStrategy):
         last = dataframe.iloc[-1]
         atr_ratio = float(last.get("atr_ratio", 0.03))
 
-        # 1R = 2x ATR
         one_r = 2.0 * atr_ratio
 
-        # Profit > 2R: Chandelier trailing
+        # Profit > 2R: trail at atr_trail_mult
         if current_profit >= 2.0 * one_r:
-            return -(1.5 * atr_ratio)
+            return -(self.atr_trail_mult.value * atr_ratio)
         # Profit > 1R: move to breakeven
         if current_profit >= one_r:
             return -(0.5 * atr_ratio)
 
-        # Initial: 2.5x ATR, floor -8%
-        return max(-(2.5 * atr_ratio), -0.08)
+        # Initial: atr_initial_mult, floor stop_floor
+        return max(-(self.atr_initial_mult.value * atr_ratio), self.stop_floor.value)
 
     def leverage(
         self,
