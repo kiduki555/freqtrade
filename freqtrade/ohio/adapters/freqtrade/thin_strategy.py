@@ -530,7 +530,7 @@ class OhioThinStrategy(IStrategy):
         side: str,
         **kwargs,
     ) -> float:
-        """1x leverage — leverage keeps hurting R:R until we redesign stops."""
+        """1x leverage — our signal quality insufficient for leverage."""
         return 1.0
 
     # ------------------------------------------------------------------
@@ -641,17 +641,14 @@ class OhioThinStrategy(IStrategy):
         entry_rate = trade.open_rate
         is_long = not trade.is_short
 
-        # Determine entry type — MR (BB dip) needs wider stops vs TF (EMA cross)
         entry_tag = trade.enter_tag or ""
         is_mr = "bb_dip" in entry_tag
         is_tf = "ema_cross" in entry_tag or "breakout" in entry_tag
 
-        # 1R definition: ~2x ATR magnitude
         one_r = 2.0 * atr_ratio
-
         bars = self._bars_since_entry(trade, current_time)
 
-        # Phase 3: Chandelier trailing at +2R profit (applies to all types)
+        # Phase 3: Chandelier trailing at +2R profit
         if current_profit >= 2.0 * one_r:
             return -(2.5 * atr_ratio)
 
@@ -660,16 +657,10 @@ class OhioThinStrategy(IStrategy):
             lock = current_profit - one_r - 0.002
             return -max(0.0, lock) if lock > 0 else -0.005
 
-        # Phase 1: Entry-type specific initial stop
         if is_mr:
-            # MR (BB dip): wider stop — MR needs room for mean reversion to develop
-            # Use 3.5x ATR, floor at -5%
             return max(-(atr_ratio * 3.5), -0.05)
 
         if is_tf:
-            # TF (EMA cross/breakout): structure-based stop using recent swing
-            # Keep structure stop active throughout trade (not just 12 bars)
-            # Lookback grows with time to follow the trend
             lookback_n = min(len(dataframe), max(bars + 10, 20))
             lookback = dataframe.tail(lookback_n)
             if is_long:
@@ -680,7 +671,6 @@ class OhioThinStrategy(IStrategy):
                 swing_high = float(lookback["high"].max())
                 stop_price = swing_high + (0.5 * atr_ratio * entry_rate)
                 stop_ratio = 1.0 - (stop_price / entry_rate)
-            # Widen clamp for long-held trades (let trends breathe)
             max_width = -0.06 if bars > 24 else -0.04
             return max(max_width, min(-0.015, stop_ratio))
 
@@ -720,7 +710,7 @@ class OhioThinStrategy(IStrategy):
             )
 
             if aligned_with_trend:
-                # Aligned: hold for bigger wins
+                # Aligned with 1D trend: hold for bigger wins
                 if bars < 24 and current_profit >= 0.10:
                     return "ohio_aligned_roi_10pct"
                 if bars < 72 and current_profit >= 0.06:
@@ -752,30 +742,67 @@ class OhioThinStrategy(IStrategy):
         current_exit_profit: float,
         **kwargs,
     ) -> float | None:
-        """Partial exits: 25% at 1R, 50% (of original) at 2R, 25% runner.
+        """Dual-mode position adjustment:
 
-        Uses entry_atr saved in order_filled for 1R calculation.
+        Aligned with 1D trend: PYRAMID (scale IN at +1R, +2R — Turtle Trading)
+        Non-aligned: SCALE OUT (25% at 1R, 50% of original at 2R)
         """
         entry_atr = trade.get_custom_data("entry_atr", default=0.02)
         if not isinstance(entry_atr, (int, float)):
             entry_atr = 0.02
-        one_r = 2.0 * float(entry_atr)
+        # 1R = 1x ATR (matches typical trade profit; 2x ATR too high vs ROI 1-5%)
+        one_r = 1.0 * float(entry_atr)
 
-        exits_taken = trade.get_custom_data("partial_exits_taken", default=0)
-        if not isinstance(exits_taken, int):
-            exits_taken = 0
-
-        # Only scale down, never add
+        # Only act on profitable trades
         if current_profit <= 0:
             return None
 
-        # Get current total stake from filled entry orders
+        # Check 1D regime alignment
+        dataframe, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
+        is_aligned = False
+        if dataframe is not None and len(dataframe) > 0:
+            last = dataframe.iloc[-1]
+            regime_1d = str(last.get("ohio_1d_regime", "choppy"))
+            is_long = not trade.is_short
+            is_aligned = (regime_1d == "bull" and is_long) or (
+                regime_1d == "bear" and not is_long
+            )
+
+        # Get current total stake
         filled_entries = trade.select_filled_orders(trade.entry_side)
         if not filled_entries:
             return None
         current_stake = sum(float(o.stake_amount or 0) for o in filled_entries)
         if current_stake <= 0:
             return None
+
+        if is_aligned:
+            # PYRAMIDING: scale in at +1R and +2R
+            adds_taken = trade.get_custom_data("pyramid_adds", default=0)
+            if not isinstance(adds_taken, int):
+                adds_taken = 0
+
+            # First add at +1R: 50% of original stake
+            if adds_taken == 0 and current_profit >= one_r:
+                trade.set_custom_data("pyramid_adds", 1)
+                # Use initial stake (current stake IS original since no scale-out yet)
+                add_size = current_stake * 0.5
+                if min_stake is not None and add_size >= min_stake:
+                    return add_size
+
+            # Second add at +2R: 25% of current total
+            if adds_taken == 1 and current_profit >= 2.0 * one_r:
+                trade.set_custom_data("pyramid_adds", 2)
+                add_size = current_stake * 0.25
+                if min_stake is not None and add_size >= min_stake:
+                    return add_size
+
+            return None
+
+        # NON-ALIGNED: scale-out (original behavior)
+        exits_taken = trade.get_custom_data("partial_exits_taken", default=0)
+        if not isinstance(exits_taken, int):
+            exits_taken = 0
 
         # First partial at 1R: exit 25% of current
         if exits_taken == 0 and current_profit >= one_r:
